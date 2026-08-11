@@ -9,4 +9,4 @@ node_modules/
 .clasprc.json
 
 dist/
-build/
+/src/build/

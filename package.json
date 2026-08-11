@@ -4,11 +4,13 @@
   "private": true,
   "main": "index.js",
   "scripts": {
-    "typecheck": "tsc --noEmit",
-    "push": "clasp push",
+    "build": "node scripts/clean-build.mjs && tsc --project tsconfig.build.json",
+    "typecheck": "tsc --project tsconfig.json --noEmit",
+    "verify": "npm run typecheck && npm run build && node scripts/verify.mjs",
+    "push": "npm run build && clasp push",
     "pull": "clasp pull",
     "open": "clasp open-script",
-    "status": "clasp status"
+    "status": "npm run build && clasp status"
   },
   "keywords": [],
   "author": "",
