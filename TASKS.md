@@ -170,7 +170,7 @@ anything.
 - [x] Initialize the audit document before the batch `STARTED` record and append every sanitized batch/file record immediately with `saveAndClose()`.
 - [x] Write an action-intent audit record before each live document mutation so an interrupted run remains traceable.
 - [x] Fail closed before further document/folder mutations when the persistent audit document cannot be updated; retain console diagnostics without logging secrets.
-- [x] Treat audit-document creation/update as the sole explicit Drive-write exception in `DRY_RUN` and `SUGGEST`; keep all classified documents and taxonomy folders unchanged in those modes.
+- [x] Treat audit-document creation/update as the initial explicit Drive-write exception in `DRY_RUN` and `SUGGEST`; task 10 adds a separate report document while keeping all classified documents and taxonomy folders unchanged.
 - [x] Add the minimum Google Docs OAuth scope, static/mock verification, and a clearly labeled manual audit-log smoke test.
 - [x] Update README safety, scope, rollout, and troubleshooting documentation for the audit exception and required reauthorization.
 - [x] Run typecheck, build, static verification, clasp status, and full diff/secret/destructive-operation review.
@@ -178,3 +178,25 @@ anything.
 ### 9.1 Owner/manual verification
 
 - [ ] Push the audit-log change, authorize the additional Google Docs scope, run `runSorter` with `DRY_RUN=true`, and confirm a new `Drive Sorter Audit` document appears directly in `ROOT_FOLDER_ID` with progressive JSON records.
+
+## 10. Gemini-generated human-readable run report (new active scope)
+
+The raw audit document remains authoritative. At the end of each valid run,
+Gemini receives only its bounded, already-sanitized JSON lines and returns a
+strict structured summary. Application code validates and renders that summary
+into a separate Google Doc; Gemini never supplies Drive commands or markup.
+
+- [x] Define bounded report input, output, file-row, validation, and document metadata contracts without including document content or API keys.
+- [x] Retain the sanitized JSON lines written to the active audit document in memory, with a deterministic input-size limit and explicit truncation marker.
+- [x] Add a strict Gemini report prompt and JSON schema that treats every raw-log field as untrusted data, ignores embedded instructions, and forbids Drive actions, HTML, and invented files.
+- [x] Parse and runtime-validate the generated summary, including exact membership of every model file ID; derive and display each action, destination, and resulting filename exclusively from the raw audit data.
+- [x] Render a separate readable Google Doc with title, run status/counts, table of file outcomes, warnings, recommended next steps, and reference to the authoritative raw audit ID.
+- [x] Generate the companion report only after document processing has ended; failures in report generation/rendering are logged in the raw audit and never change the sorting result.
+- [x] Keep the human-report document as an explicit audit-only write permitted in `DRY_RUN` and `SUGGEST`, with no overwrite/delete behavior.
+- [x] Add static/mock tests for prompt injection isolation, raw-log bounds, response validation, safe rendering, and report-generation failure handling.
+- [x] Update README, setup/authorization notes, log documentation, manual test functions, and troubleshooting.
+- [x] Run typecheck, build, static verification, clasp status, and full diff/secret/destructive-operation review.
+
+### 10.1 Owner/manual verification
+
+- [ ] Push the report feature, run `runSorter` with `DRY_RUN=true`, and confirm that `Drive Sorter Report …` appears beside the raw audit in `ROOT_FOLDER_ID` with accurate file rows and no document/taxonomy changes.

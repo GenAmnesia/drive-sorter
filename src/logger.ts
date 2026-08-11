@@ -1,5 +1,9 @@
 let activePersistentAuditLog: PersistentAuditLogInfo | null = null;
 let persistentAuditLogFailure: string | null = null;
+const HUMAN_REPORT_RAW_LOG_MAX_CHARS = 100_000;
+let persistentAuditSerializedLines: string[] = [];
+let persistentAuditSerializedChars = 0;
+let persistentAuditInputTruncated = false;
 
 class PersistentAuditLogError extends Error {
   constructor(message: string) {
@@ -31,6 +35,9 @@ function startPersistentAuditLog(
     startedAtEpochMs,
   );
   persistentAuditLogFailure = null;
+  persistentAuditSerializedLines = [];
+  persistentAuditSerializedChars = 0;
+  persistentAuditInputTruncated = false;
   logPersistentAuditEvent({
     timestamp: isoTimestamp(),
     event: "AUDIT_LOG_STARTED",
@@ -49,12 +56,27 @@ function startPersistentAuditLog(
 function finishPersistentAuditLog(): void {
   activePersistentAuditLog = null;
   persistentAuditLogFailure = null;
+  persistentAuditSerializedLines = [];
+  persistentAuditSerializedChars = 0;
+  persistentAuditInputTruncated = false;
 }
 
 function getPersistentAuditLogInfo(): PersistentAuditLogInfo | null {
   return activePersistentAuditLog === null
     ? null
     : { ...activePersistentAuditLog };
+}
+
+/** Return the bounded JSONL source that can safely be summarized by Gemini. */
+function getPersistentAuditLogSnapshot(): PersistentAuditLogSnapshot | null {
+  if (activePersistentAuditLog === null) {
+    return null;
+  }
+  return {
+    audit: { ...activePersistentAuditLog },
+    serializedLines: persistentAuditSerializedLines.slice(),
+    inputTruncated: persistentAuditInputTruncated,
+  };
 }
 
 /**
@@ -80,6 +102,7 @@ function appendToPersistentAuditLog(serializedRecord: string): void {
       serializedRecord,
     );
     activePersistentAuditLog.linesWritten += 1;
+    capturePersistentAuditLine(serializedRecord);
   } catch (error: unknown) {
     persistentAuditLogFailure = getErrorMessage(error, 500);
     console.error(
@@ -97,6 +120,26 @@ function appendToPersistentAuditLog(serializedRecord: string): void {
       `Could not persist the audit record: ${persistentAuditLogFailure}`,
     );
   }
+}
+
+/**
+ * Keep an in-memory copy of the exact persisted JSONL for the one optional
+ * report request. The authoritative document itself is never truncated.
+ */
+function capturePersistentAuditLine(serializedRecord: string): void {
+  if (persistentAuditInputTruncated) {
+    return;
+  }
+  const separatorLength =
+    persistentAuditSerializedLines.length === 0 ? 0 : 1;
+  const nextLength =
+    persistentAuditSerializedChars + separatorLength + serializedRecord.length;
+  if (nextLength > HUMAN_REPORT_RAW_LOG_MAX_CHARS) {
+    persistentAuditInputTruncated = true;
+    return;
+  }
+  persistentAuditSerializedLines.push(serializedRecord);
+  persistentAuditSerializedChars = nextLength;
 }
 
 /** Console remains useful in the editor; the same sanitized line is persisted. */

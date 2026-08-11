@@ -59,6 +59,74 @@ function testPersistentAuditLog(): void {
   }
 }
 
+/**
+ * End-to-end smoke test for the Gemini companion report. It writes only a new
+ * synthetic raw audit and its report into ROOT_FOLDER_ID; no inbox file or
+ * folder is read, moved, renamed, or created.
+ */
+function testHumanReadableReport(): void {
+  const config = getAppConfig("FULL");
+  const context = validateDriveConfiguration(config);
+  const startedAt = Date.now();
+  const deadlineEpochMs = startedAt + Math.min(config.maxRunMillis, 60_000);
+  const runId = createRunId();
+  startPersistentAuditLog(context.root, runId, startedAt);
+
+  try {
+    logOperation(
+      createStructuredLogRecord({
+        runId,
+        fileId: "manual-human-report-smoke-test",
+        originalFilename: "Esempio report leggibile.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 0,
+        classification: null,
+        action: "DRY_RUN",
+        wouldAction: "MOVE",
+        destinationFolderId: null,
+        destinationPath: "Esempio/Destinazione",
+        resultingFilename: "Esempio report leggibile.pdf",
+        duplicateOfFileId: null,
+        possibleDuplicateOfFileIds: [],
+        errorKind: null,
+        error: null,
+        dryRun: true,
+        durationMs: 0,
+        reason: "Record sintetico per verificare il report leggibile.",
+      }),
+    );
+    logBatch(
+      createBatchLogRecord({
+        runId,
+        status: "COMPLETED",
+        dryRun: true,
+        processed: 1,
+        moved: 0,
+        reviewed: 0,
+        duplicates: 0,
+        unsupported: 0,
+        errors: 0,
+        skipped: 0,
+        elapsedMs: Date.now() - startedAt,
+        message: "Synthetic human-readable report smoke test.",
+      }),
+    );
+    const report = finalizeHumanReadableRunReport(
+      config,
+      context.root,
+      runId,
+      deadlineEpochMs,
+    );
+    if (report === null) {
+      throw new Error(
+        "Human-readable report was not created; inspect the raw audit log for HUMAN_REPORT_ERROR.",
+      );
+    }
+  } finally {
+    finishPersistentAuditLog();
+  }
+}
+
 /** Build and print the exact candidate tree without creating any folder. */
 function testFolderTree(): void {
   const config = getAppConfig("DRIVE");

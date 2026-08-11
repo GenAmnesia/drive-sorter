@@ -181,8 +181,9 @@ function buildPersistentAuditLogFilename(
 
 /**
  * Create the one audit document for a run and place only that new file in the
- * configured root. This is intentionally the only audit-write exception to
- * DRY_RUN/SUGGEST; it never changes a classified document or existing file.
+ * configured root. Together with the end-of-run companion report, this is an
+ * intentional audit-only write exception to DRY_RUN/SUGGEST; it never changes
+ * a classified document or existing file.
  */
 function createPersistentAuditDocument(
   root: GoogleAppsScript.Drive.Folder,
@@ -203,6 +204,7 @@ function createPersistentAuditDocument(
   }
 
   return {
+    runId,
     documentId,
     fileId: auditFile.getId(),
     filename: auditFile.getName(),
@@ -226,6 +228,153 @@ function appendPersistentAuditDocumentLine(
   const document = DocumentApp.openById(documentId);
   document.getBody().appendParagraph(serializedRecord);
   document.saveAndClose();
+}
+
+function buildHumanReadableReportFilename(
+  runId: string,
+  startedAt: string,
+): string {
+  const timestamp = startedAt.replace(/[:.]/g, "-");
+  const safeRunId = runId
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .slice(-48);
+  return `Drive Sorter Report ${timestamp} ${safeRunId}`.slice(0, 180);
+}
+
+/**
+ * Render the Gemini prose alongside application-derived facts. This creates a
+ * new companion document only after sorting is over; it never modifies an
+ * existing report, audit, or classified file.
+ */
+function createHumanReadableReportDocument(
+  root: GoogleAppsScript.Drive.Folder,
+  source: HumanReportSource,
+  report: HumanReadableRunReport,
+): HumanReadableReportDocumentInfo {
+  assertPersistentAuditLogHealthy();
+  const filename = buildHumanReadableReportFilename(
+    source.audit.runId,
+    source.audit.startedAt,
+  );
+  const document = DocumentApp.create(filename);
+  const documentId = document.getId();
+
+  renderHumanReadableReportDocument(document, source, report);
+  document.saveAndClose();
+
+  const reportFile = DriveApp.getFileById(documentId);
+  reportFile.moveTo(root);
+  if (!fileIsDirectChildOfFolder(reportFile, root.getId())) {
+    throw new Error(
+      "The newly created human-readable report could not be verified in ROOT_FOLDER_ID.",
+    );
+  }
+
+  return {
+    documentId,
+    fileId: reportFile.getId(),
+    filename: reportFile.getName(),
+    rootFolderId: root.getId(),
+    rawAuditDocumentId: source.audit.documentId,
+  };
+}
+
+function renderHumanReadableReportDocument(
+  document: GoogleAppsScript.Document.Document,
+  source: HumanReportSource,
+  report: HumanReadableRunReport,
+): void {
+  const body = document.getBody();
+  body
+    .appendParagraph("Drive Sorter — Report esecuzione")
+    .setHeading(DocumentApp.ParagraphHeading.TITLE);
+  body.appendParagraph(report.headline).setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  body.appendParagraph(report.summary);
+  body.appendParagraph(
+    `Audit raw autorevole: ${source.audit.filename} (ID: ${source.audit.documentId})`,
+  );
+  body.appendParagraph(
+    [
+      `Stato: ${source.batch.status ?? "non disponibile"}`,
+      `DRY_RUN: ${source.batch.dryRun === true ? "sì" : source.batch.dryRun === false ? "no" : "non disponibile"}`,
+      `File elaborati: ${source.batch.processed}`,
+      `Spostati: ${source.batch.moved}`,
+      `Review: ${source.batch.reviewed}`,
+      `Duplicati: ${source.batch.duplicates}`,
+      `Errori: ${source.batch.errors}`,
+      `Saltati: ${source.batch.skipped}`,
+    ].join(" · "),
+  );
+
+  if (source.inputTruncated) {
+    body.appendParagraph(
+      "Nota: l'input inviato a Gemini è stato limitato per dimensione; il documento audit raw resta la fonte completa.",
+    );
+  }
+
+  body.appendParagraph("Esito per file").setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  const notesByFileId: Record<string, HumanReportFileNote> =
+    Object.create(null) as Record<string, HumanReportFileNote>;
+  report.fileNotes.forEach((note) => {
+    notesByFileId[note.fileId] = note;
+  });
+  const rows: string[][] = [
+    ["File", "Esito", "Destinazione", "Dettagli", "Nota Gemini"],
+    ...source.fileOutcomes.map((outcome) => [
+      outcome.originalFilename,
+      formatHumanReportAction(outcome),
+      outcome.destinationPath ?? "—",
+      formatHumanReportDetails(outcome),
+      formatHumanReportNote(notesByFileId[outcome.fileId]),
+    ]),
+  ];
+  if (rows.length === 1) {
+    body.appendParagraph("Nessun file elaborato in questo run.");
+  } else {
+    body.appendTable(rows);
+  }
+
+  appendHumanReportListSection(body, "Attenzioni", report.warnings);
+  appendHumanReportListSection(body, "Prossimi passi", report.nextSteps);
+  body.appendParagraph(
+    "Le colonne operative sono derivate dall'audit raw validato dal codice; le note sono un riassunto Gemini e non eseguono azioni.",
+  );
+}
+
+function appendHumanReportListSection(
+  body: GoogleAppsScript.Document.Body,
+  heading: string,
+  items: readonly string[],
+): void {
+  if (items.length === 0) {
+    return;
+  }
+  body.appendParagraph(heading).setHeading(DocumentApp.ParagraphHeading.HEADING1);
+  items.forEach((item) => body.appendListItem(item));
+}
+
+function formatHumanReportAction(outcome: HumanReportFileOutcome): string {
+  return outcome.wouldAction === null
+    ? outcome.action
+    : `${outcome.action} (pianificato: ${outcome.wouldAction})`;
+}
+
+function formatHumanReportDetails(outcome: HumanReportFileOutcome): string {
+  const details = [
+    outcome.resultingFilename === null
+      ? null
+      : `Nome risultante: ${outcome.resultingFilename}`,
+    outcome.duplicateOfFileId === null
+      ? null
+      : `Duplicato di: ${outcome.duplicateOfFileId}`,
+    outcome.errorKind === null ? null : `Categoria: ${outcome.errorKind}`,
+    outcome.reason === null ? null : outcome.reason,
+  ].filter((value): value is string => value !== null);
+  return details.length === 0 ? "—" : details.join("\n");
+}
+
+function formatHumanReportNote(note: HumanReportFileNote | undefined): string {
+  return note === undefined ? "Nessuna nota disponibile." : `${note.attention}: ${note.note}`;
 }
 
 function getOrCreateDuplicatesFolder(

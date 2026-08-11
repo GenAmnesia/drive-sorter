@@ -145,6 +145,12 @@ function runSorter(): void {
         ].join("; "),
       }),
     );
+    finalizeHumanReadableRunReport(
+      config,
+      context.root,
+      runId,
+      deadlineEpochMs,
+    );
   } catch (error: unknown) {
     totals.errors += 1;
     logBatchFailureSafely(
@@ -164,6 +170,14 @@ function runSorter(): void {
         message: getErrorMessage(error),
       }),
     );
+    if (config !== null && context !== null) {
+      finalizeHumanReadableRunReport(
+        config,
+        context.root,
+        runId,
+        startedAt + config.maxRunMillis,
+      );
+    }
   } finally {
     finishPersistentAuditLog();
     if (lockAcquired) {
