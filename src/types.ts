@@ -96,7 +96,7 @@ interface GeminiContent {
 interface GeminiGenerationConfig {
   responseFormat: {
     text: {
-      mimeType: "application/json";
+      mimeType: "APPLICATION_JSON";
       schema: unknown;
     };
   };

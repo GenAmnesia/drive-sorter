@@ -159,7 +159,7 @@ function buildGeminiClassificationRequest(
     generationConfig: {
       responseFormat: {
         text: {
-          mimeType: "application/json",
+          mimeType: "APPLICATION_JSON",
           schema: buildGeminiClassificationSchema(candidates),
         },
       },
@@ -218,7 +218,24 @@ function buildGeminiClassificationSchema(
  * testGemini Apps Script entry point.
  */
 function checkGeminiConnection(config: AppConfig): boolean {
-  const request: GeminiGenerateContentRequest = {
+  const request = buildGeminiHealthCheckRequest();
+
+  const parsed = parseGeminiGenerateContentEnvelope(
+    fetchGeminiGenerateContent(
+      request,
+      config,
+      Date.now() + Math.min(config.maxRunMillis, 60_000),
+    ),
+  );
+  return (
+    isGeminiRecord(parsed) &&
+    Object.keys(parsed).length === 1 &&
+    parsed.status === "ok"
+  );
+}
+
+function buildGeminiHealthCheckRequest(): GeminiGenerateContentRequest {
+  return {
     contents: [
       {
         role: "user",
@@ -235,7 +252,7 @@ function checkGeminiConnection(config: AppConfig): boolean {
     generationConfig: {
       responseFormat: {
         text: {
-          mimeType: "application/json",
+          mimeType: "APPLICATION_JSON",
           schema: {
             type: "object",
             additionalProperties: false,
@@ -247,19 +264,6 @@ function checkGeminiConnection(config: AppConfig): boolean {
       maxOutputTokens: GEMINI_HEALTH_CHECK_MAX_OUTPUT_TOKENS,
     },
   };
-
-  const parsed = parseGeminiGenerateContentEnvelope(
-    fetchGeminiGenerateContent(
-      request,
-      config,
-      Date.now() + Math.min(config.maxRunMillis, 60_000),
-    ),
-  );
-  return (
-    isGeminiRecord(parsed) &&
-    Object.keys(parsed).length === 1 &&
-    parsed.status === "ok"
-  );
 }
 
 /** Perform generateContent with bounded retry/backoff for transient failures. */

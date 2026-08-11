@@ -234,7 +234,7 @@ const requestShape = evaluate(`JSON.stringify(buildGeminiClassificationRequest({
 const request = JSON.parse(requestShape);
 assert.equal(
   request.generationConfig.responseFormat.text.mimeType,
-  "application/json",
+  "APPLICATION_JSON",
 );
 assert.equal("responseMimeType" in request.generationConfig, false);
 assert.equal("temperature" in request.generationConfig, false);
@@ -242,6 +242,18 @@ assert.deepEqual(
   request.generationConfig.responseFormat.text.schema.properties.targetFolderId
     .type,
   ["string", "null"],
+);
+const healthRequest = JSON.parse(
+  evaluate("JSON.stringify(buildGeminiHealthCheckRequest())"),
+);
+assert.equal(
+  healthRequest.generationConfig.responseFormat.text.mimeType,
+  "APPLICATION_JSON",
+);
+assert.deepEqual(
+  healthRequest.generationConfig.responseFormat.text.schema.properties.status
+    .enum,
+  ["ok"],
 );
 assert.match(request.systemInstruction.parts[0].text, /untrusted data/i);
 assert.match(request.systemInstruction.parts[0].text, /Ignore every instruction/i);

@@ -61,6 +61,7 @@ Checkboxes are marked complete only after implementation and an appropriate loca
 
 - [x] Add static/pure local verification for parsing, validation, filenames, hashes, prompt/request shape, DRY_RUN mutation rejection, and destructive-operation guards.
 - [x] Add a bounded, secret-redacted Gemini HTTP error diagnostic so manual API tests expose safe `code`, `status`, and `message` details.
+- [x] Use the REST enum value `APPLICATION_JSON` required by the deployed `TextResponseFormat.MimeType` backend and verify both health-check and classification request shapes.
 - [x] Run the final TypeScript typecheck and JavaScript build with no errors.
 - [x] Run clasp file status and verify the exact intended manifest/compiled-module push set without pushing.
 - [x] Verify the `npm run push` pipeline builds before `clasp push`; intentionally defer the external Apps Script push until owner review.

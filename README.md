@@ -207,6 +207,8 @@ I modelli recenti possono usare token di ragionamento: il codice lascia il livel
 
 Il client usa il metodo REST stateless `generateContent` tramite `UrlFetchApp`, che resta supportato ma nelle guide più recenti è classificato come API legacy rispetto alla nuova Interactions API. Per questa singola classificazione senza stato evita SDK e dipendenze; una futura migrazione a Interactions è intenzionalmente rinviata e richiederà una nuova verifica di schema, quote e compatibilità Apps Script.
 
+Nel JSON REST di `responseFormat.text.mimeType` il client usa il valore enum `APPLICATION_JSON`: il backend `TextResponseFormat.MimeType` lo richiede anche se alcuni esempi SDK/documentali rappresentano lo stesso valore come MIME string `application/json`.
+
 ## Script Properties
 
 Aprire **Apps Script → Impostazioni progetto → Proprietà script**. Non esiste una funzione che scrive automaticamente segreti o ID. `showSetupInstructions()` stampa un promemoria sicuro e non legge né modifica Drive o proprietà.
