@@ -114,6 +114,64 @@ function sanitizeStructuredLogRecord(
       record.reason === null
         ? null
         : truncateString(redactSensitiveText(record.reason), 1_000),
+    folderCreationProposal:
+      record.folderCreationProposal === undefined ||
+      record.folderCreationProposal === null
+        ? record.folderCreationProposal
+        : sanitizeFolderCreationProposalForLog(
+            record.folderCreationProposal,
+          ),
+    folderCreationProposalErrors:
+      record.folderCreationProposalErrors === undefined
+        ? undefined
+        : record.folderCreationProposalErrors
+            .slice(0, 20)
+            .map((error) =>
+              truncateString(redactSensitiveText(error), 300),
+            ),
+    createdFolderId:
+      record.createdFolderId === undefined || record.createdFolderId === null
+        ? record.createdFolderId
+        : redactSensitiveText(record.createdFolderId),
+    createdFolderPath:
+      record.createdFolderPath === undefined ||
+      record.createdFolderPath === null
+        ? record.createdFolderPath
+        : truncateString(
+            redactSensitiveText(record.createdFolderPath),
+            1_000,
+          ),
+    createdFolders:
+      record.createdFolders === undefined
+        ? undefined
+        : record.createdFolders.slice(0, 20).map((folder) => ({
+            id: redactSensitiveText(folder.id),
+            path: truncateString(redactSensitiveText(folder.path), 1_000),
+            purpose: folder.purpose,
+          })),
+  };
+}
+
+function sanitizeFolderCreationProposalForLog(
+  proposal: FolderCreationProposal,
+): FolderCreationProposal {
+  return {
+    parentFolderId: redactSensitiveText(proposal.parentFolderId),
+    parentFolderPath: truncateString(
+      redactSensitiveText(proposal.parentFolderPath),
+      1_000,
+    ),
+    proposedSegments: proposal.proposedSegments
+      .slice(0, 10)
+      .map((segment) =>
+        truncateString(redactSensitiveText(segment), 100),
+      ),
+    patternType: proposal.patternType,
+    evidenceFolderIds: proposal.evidenceFolderIds
+      .slice(0, 100)
+      .map((id) => redactSensitiveText(id)),
+    confidence: proposal.confidence,
+    reason: truncateString(redactSensitiveText(proposal.reason), 300),
   };
 }
 

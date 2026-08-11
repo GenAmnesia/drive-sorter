@@ -78,6 +78,109 @@ function testGemini(): void {
   );
 }
 
+/**
+ * Read-only end-to-end smoke test for the optional missing-folder proposal.
+ *
+ * The test deliberately forces an in-memory SUGGEST/DRY_RUN configuration so
+ * it remains read-only even if the stored rollout mode is AUTO and DRY_RUN is
+ * false. It prepares only the first direct inbox file, builds one trusted
+ * index, and makes at most one proposal request. It never calls the Drive
+ * mutation boundary.
+ */
+function testFolderCreationProposal(): void {
+  const storedConfig = getAppConfig("FULL");
+  const testConfig: AppConfig = {
+    ...storedConfig,
+    dryRun: true,
+    folderCreationMode: "SUGGEST",
+    folderCreationConfidenceThreshold: Math.max(
+      storedConfig.folderCreationConfidenceThreshold,
+      storedConfig.confidenceThreshold,
+    ),
+  };
+  const context = validateDriveConfiguration(testConfig);
+  const index = buildFolderIndex(testConfig, context);
+  const creationContexts = buildFolderCreationContexts(index, testConfig);
+  const files = context.inbox.getFiles();
+
+  if (creationContexts.length === 0) {
+    console.log(
+      safeJsonStringify({
+        timestamp: isoTimestamp(),
+        event: "TEST_FOLDER_PROPOSAL_COMPLETE",
+        status: "no_eligible_creation_context",
+        configuredMode: storedConfig.folderCreationMode,
+        effectiveMode: testConfig.folderCreationMode,
+        configuredCreationThreshold:
+          storedConfig.folderCreationConfidenceThreshold,
+        effectiveCreationThreshold:
+          testConfig.folderCreationConfidenceThreshold,
+        candidateFolderCount: index.folders.length,
+        creationContextCount: 0,
+        proposalRequestMade: false,
+        readOnly: true,
+        driveModified: false,
+      }),
+    );
+    return;
+  }
+
+  if (!files.hasNext()) {
+    console.log(
+      safeJsonStringify({
+        timestamp: isoTimestamp(),
+        event: "TEST_FOLDER_PROPOSAL_COMPLETE",
+        status: "inbox_empty",
+        configuredMode: storedConfig.folderCreationMode,
+        effectiveMode: testConfig.folderCreationMode,
+        configuredCreationThreshold:
+          storedConfig.folderCreationConfidenceThreshold,
+        effectiveCreationThreshold:
+          testConfig.folderCreationConfidenceThreshold,
+        candidateFolderCount: index.folders.length,
+        creationContextCount: creationContexts.length,
+        proposalRequestMade: false,
+        readOnly: true,
+        driveModified: false,
+      }),
+    );
+    return;
+  }
+
+  const file = files.next();
+  const prepared = prepareDocument(file, testConfig);
+  const evaluation = evaluateFolderCreationProposal(
+    prepared,
+    index,
+    testConfig,
+    Date.now() + testConfig.maxRunMillis,
+  );
+
+  console.log(
+    safeJsonStringify({
+      timestamp: isoTimestamp(),
+      event: "TEST_FOLDER_PROPOSAL_COMPLETE",
+      status: evaluation.status,
+      configuredMode: storedConfig.folderCreationMode,
+      effectiveMode: testConfig.folderCreationMode,
+      configuredCreationThreshold:
+        storedConfig.folderCreationConfidenceThreshold,
+      effectiveCreationThreshold:
+        testConfig.folderCreationConfidenceThreshold,
+      fileId: file.getId(),
+      filename: file.getName(),
+      mimeType: file.getMimeType(),
+      candidateFolderCount: index.folders.length,
+      creationContextCount: creationContexts.length,
+      proposalRequestMade: true,
+      proposal: evaluation.proposal,
+      validationErrors: evaluation.errors,
+      readOnly: true,
+      driveModified: false,
+    }),
+  );
+}
+
 /** Deterministic SHA-256 self-test using a memory-only blob. */
 function testHashing(): void {
   const actual = sha256HexFromBytes(
@@ -122,4 +225,3 @@ function testFilenameCollision(): void {
     }),
   );
 }
-

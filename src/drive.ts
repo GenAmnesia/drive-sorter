@@ -5,24 +5,42 @@ interface AppliedFileAction {
   moved: boolean;
   renamed: boolean;
   createdFolder: boolean;
+  createdFolderId: string | null;
+  createdFolderPath: string | null;
+  effectiveAction: LogAction;
+  createdFolders: CreatedFolderRecord[];
+  duplicateOfFileId: string | null;
+  possibleDuplicateOfFileIds: string[];
 }
 
 class PartialDriveMutationError extends Error {
   readonly destinationFolderId: string;
   readonly destinationPath: string;
   readonly resultingFilename: string;
+  readonly effectiveAction: LogAction;
+  readonly createdFolders: CreatedFolderRecord[];
+  readonly duplicateOfFileId: string | null;
+  readonly possibleDuplicateOfFileIds: string[];
 
   constructor(
     message: string,
     destinationFolderId: string,
     destinationPath: string,
     resultingFilename: string,
+    effectiveAction: LogAction,
+    createdFolders: readonly CreatedFolderRecord[],
+    duplicateOfFileId: string | null,
+    possibleDuplicateOfFileIds: readonly string[],
   ) {
     super(message);
     this.name = "PartialDriveMutationError";
     this.destinationFolderId = destinationFolderId;
     this.destinationPath = destinationPath;
     this.resultingFilename = resultingFilename;
+    this.effectiveAction = effectiveAction;
+    this.createdFolders = createdFolders.slice();
+    this.duplicateOfFileId = duplicateOfFileId;
+    this.possibleDuplicateOfFileIds = possibleDuplicateOfFileIds.slice();
     Object.setPrototypeOf(this, PartialDriveMutationError.prototype);
   }
 }
@@ -32,18 +50,27 @@ class PartialFolderCreationError extends Error {
   readonly destinationPath: string;
   readonly processingErrorKind: ProcessingErrorKind;
   readonly retryable: boolean;
+  readonly purpose: "DUPLICATES" | "TAXONOMY";
+  readonly createdFolders: CreatedFolderRecord[];
 
   constructor(
     cause: unknown,
     destinationFolderId: string,
     destinationPath: string,
+    purpose: "DUPLICATES" | "TAXONOMY" = "DUPLICATES",
+    createdFolders?: readonly CreatedFolderRecord[],
   ) {
     super(
-      `La cartella Duplicati è stata creata, ma il file non è stato spostato: ${getErrorMessage(cause)}`,
+      `A ${purpose.toLowerCase()} folder was created, but the file was not moved: ${getErrorMessage(cause)}`,
     );
     this.name = "PartialFolderCreationError";
     this.destinationFolderId = destinationFolderId;
     this.destinationPath = destinationPath;
+    this.purpose = purpose;
+    this.createdFolders =
+      createdFolders === undefined
+        ? [{ id: destinationFolderId, path: destinationPath, purpose }]
+        : createdFolders.slice();
     this.processingErrorKind =
       cause instanceof SorterError && cause.category === "API_ERROR"
         ? "API_ERROR"
@@ -51,6 +78,22 @@ class PartialFolderCreationError extends Error {
     this.retryable = cause instanceof SorterError && cause.retryable;
     Object.setPrototypeOf(this, PartialFolderCreationError.prototype);
   }
+}
+
+function findEquivalentChildFolders(
+  parent: GoogleAppsScript.Drive.Folder,
+  folderName: string,
+): GoogleAppsScript.Drive.Folder[] {
+  const normalizedName = normalizeFolderNameForLookup(folderName);
+  const matches: GoogleAppsScript.Drive.Folder[] = [];
+  const folders = parent.getFolders();
+  while (folders.hasNext()) {
+    const folder = folders.next();
+    if (normalizeFolderNameForLookup(folder.getName()) === normalizedName) {
+      matches.push(folder);
+    }
+  }
+  return matches;
 }
 
 function captureSourceFileSnapshot(
@@ -154,7 +197,8 @@ function maybeCreateFallbackFolder(
   if (
     index.folders.length > 0 ||
     !config.allowFolderCreation ||
-    config.dryRun
+    config.dryRun ||
+    config.folderCreationMode === "SUGGEST"
   ) {
     return false;
   }
@@ -473,6 +517,259 @@ function assertDriveMutationDeadline(deadlineEpochMs: number): void {
   }
 }
 
+function invalidateFolderIndexAfterCreationRace(
+  index: FolderIndex,
+  reason: string,
+): void {
+  index.isComplete = false;
+  index.invalidReason = truncateString(reason, 500);
+}
+
+function assertLiveFolderCreationEvidence(
+  validated: ValidatedFolderCreationProposal,
+  config: AppConfig,
+  context: DriveFolderContext,
+  index: FolderIndex,
+): GoogleAppsScript.Drive.Folder {
+  const parent = getFolderOrThrow(
+    validated.parentFolder.id,
+    "folderCreationParentFolderId",
+  );
+  assertDestinationStillAllowed(parent, config, context);
+  assertIndexedFolderPathStillMatches(parent, validated.parentFolder, index);
+
+  for (const evidenceEntry of validated.evidenceFolders) {
+    const evidence = getFolderOrThrow(
+      evidenceEntry.id,
+      "folderCreationEvidenceFolderId",
+    );
+    assertIndexedFolderPathStillMatches(evidence, evidenceEntry, index);
+    if (!folderIsDirectChildOfFolder(evidence, validated.parentFolder.id)) {
+      throw new Error(
+        "Folder-creation evidence is no longer a direct child of the trusted parent.",
+      );
+    }
+  }
+  return parent;
+}
+
+function assertCreatedFolderStillUnique(
+  folder: GoogleAppsScript.Drive.Folder,
+  parent: GoogleAppsScript.Drive.Folder,
+  expectedName: string,
+  expectedId: string,
+): void {
+  const equivalents = findEquivalentChildFolders(parent, expectedName);
+  if (
+    folder.isTrashed() ||
+    folder.getId() !== expectedId ||
+    folder.getName() !== expectedName ||
+    !folderIsDirectChildOfFolder(folder, parent.getId()) ||
+    equivalents.length !== 1 ||
+    equivalents[0].getId() !== expectedId
+  ) {
+    throw new Error(
+      "The created taxonomy folder is no longer the unique trusted child.",
+    );
+  }
+}
+
+function assertDynamicExactDuplicateStillMatches(
+  sourceFile: GoogleAppsScript.Drive.File,
+  duplicate: ExactDuplicateResult,
+  originalDestinationFolderId: string,
+  config: AppConfig,
+): void {
+  if (
+    !duplicate.isDuplicate ||
+    duplicate.duplicateOfFileId === null ||
+    duplicate.sourceSha256 === null
+  ) {
+    throw new Error("Dynamic duplicate proof is incomplete.");
+  }
+  const existingFile = DriveApp.getFileById(duplicate.duplicateOfFileId);
+  if (
+    existingFile.isTrashed() ||
+    !fileIsDirectChildOfFolder(existingFile, originalDestinationFolderId)
+  ) {
+    throw new Error(
+      "The dynamic duplicate original is no longer in the created destination.",
+    );
+  }
+  const sourceHash = computeFileSha256(sourceFile, config.maxHashBytes);
+  const existingHash = computeFileSha256(existingFile, config.maxHashBytes);
+  if (
+    sourceHash === null ||
+    existingHash === null ||
+    sourceHash !== duplicate.sourceSha256 ||
+    existingHash !== duplicate.sourceSha256
+  ) {
+    throw new Error("Dynamic exact-duplicate proof changed before the move.");
+  }
+}
+
+function createTrustedProposedDestinationFolder(
+  file: GoogleAppsScript.Drive.File,
+  plan: FileActionPlan,
+  config: AppConfig,
+  context: DriveFolderContext,
+  index: FolderIndex,
+  deadlineEpochMs: number,
+): {
+  folder: GoogleAppsScript.Drive.Folder;
+  path: string;
+  created: true;
+  createdFolder: CreatedFolderRecord;
+  validatedProposal: ValidatedFolderCreationProposal;
+  parent: GoogleAppsScript.Drive.Folder;
+} {
+  if (
+    plan.action !== "CREATE_FOLDER_AND_MOVE" ||
+    config.folderCreationMode !== "AUTO" ||
+    plan.folderCreationProposal == null
+  ) {
+    throw new Error(
+      "Folder creation requires an AUTO plan with a validated proposal.",
+    );
+  }
+
+  // Autonomous v1 authorizes one missing direct child only. A larger configured
+  // suggestion can still be inspected in SUGGEST mode but cannot reach Drive.
+  if (plan.folderCreationProposal.proposedSegments.length !== 1) {
+    throw new Error(
+      "Autonomous folder creation is limited to one missing leaf segment.",
+    );
+  }
+
+  const contexts = buildFolderCreationContexts(index, config);
+  const validation = validateFolderCreationProposal(
+    plan.folderCreationProposal,
+    contexts,
+    index,
+    config,
+  );
+  if (!validation.valid) {
+    throw new Error(
+      `Folder proposal failed mutation-boundary validation: ${validation.errors.join("; ")}`,
+    );
+  }
+  const validated = validation.value;
+  const proposedName = validated.proposal.proposedSegments[0];
+  if (
+    validated.proposal.patternType === "OTHER" ||
+    validated.proposal.confidence < config.folderCreationConfidenceThreshold ||
+    plan.destinationFolderId !== validated.parentFolder.id ||
+    plan.destinationPath !== validated.finalPath
+  ) {
+    throw new Error(
+      "Folder proposal does not match the trusted AUTO action plan.",
+    );
+  }
+
+  let parent: GoogleAppsScript.Drive.Folder;
+  try {
+    parent = assertLiveFolderCreationEvidence(
+      validated,
+      config,
+      context,
+      index,
+    );
+  } catch (error: unknown) {
+    invalidateFolderIndexAfterCreationRace(
+      index,
+      "Folder-creation parent or evidence changed after proposal validation.",
+    );
+    throw error;
+  }
+  assertFileStillInInbox(file, config);
+  assertFileMatchesSnapshot(file, plan.sourceSnapshot);
+  assertDriveMutationDeadline(deadlineEpochMs);
+
+  if (index.folders.length + 1 > config.maxCandidateFolders) {
+    throw new Error(
+      "Creating the proposed folder would exceed MAX_CANDIDATE_FOLDERS.",
+    );
+  }
+
+  if (findEquivalentChildFolders(parent, proposedName).length > 0) {
+    invalidateFolderIndexAfterCreationRace(
+      index,
+      "An equivalent child appeared after the folder index was built.",
+    );
+    throw new SorterError(
+      "API_ERROR",
+      "FOLDER_CREATION_RACE",
+      "An equivalent child appeared before creation; file left in inbox for a fresh run.",
+      { retryable: true },
+    );
+  }
+
+  const createdFolder = createValidatedChildFolder(parent, proposedName);
+  let createdFolderId = "<unavailable>";
+  let addedToIndex = false;
+  try {
+    createdFolderId = createdFolder.getId();
+    assertCreatedFolderStillUnique(
+      createdFolder,
+      parent,
+      proposedName,
+      createdFolderId,
+    );
+
+    const confirmedEntry: FolderEntry = {
+      id: createdFolderId,
+      name: proposedName,
+      path: validated.finalPath,
+      parentId: validated.parentFolder.id,
+      depth: validated.finalDepth,
+    };
+    addConfirmedFolderEntryToIndex(index, confirmedEntry, config);
+    addedToIndex = true;
+
+    // Creation is not a transaction. Re-check every authorization input before
+    // allowing the subsequent file move.
+    assertFileStillInInbox(file, config);
+    assertFileMatchesSnapshot(file, plan.sourceSnapshot);
+    assertLiveFolderCreationEvidence(
+      {
+        ...validated,
+        // validate the pre-creation parent/evidence only; the newly indexed
+        // child is not itself authorization evidence.
+      },
+      config,
+      context,
+      index,
+    );
+    assertDriveMutationDeadline(deadlineEpochMs);
+  } catch (error: unknown) {
+    invalidateFolderIndexAfterCreationRace(
+      index,
+      addedToIndex
+        ? "A post-creation check failed; the batch must rebuild its trusted folder index."
+        : "A taxonomy folder may have been created but could not be added safely to the in-memory index.",
+    );
+    throw new PartialFolderCreationError(
+      error,
+      createdFolderId,
+      validated.finalPath,
+      "TAXONOMY",
+    );
+  }
+
+  return {
+    folder: createdFolder,
+    path: validated.finalPath,
+    created: true,
+    createdFolder: {
+      id: createdFolderId,
+      path: validated.finalPath,
+      purpose: "TAXONOMY",
+    },
+    validatedProposal: validated,
+    parent,
+  };
+}
+
 /**
  * Central mutation boundary. Callers must construct a fully validated plan;
  * this function independently re-resolves trusted folders and rechecks state.
@@ -488,7 +785,13 @@ function applyFileActionPlan(
   if (config.dryRun) {
     throw new Error("Mutazione Drive rifiutata: DRY_RUN è attivo.");
   }
-  if (plan.action !== "MOVE" && plan.action !== "REVIEW" && plan.action !== "DUPLICATE" && plan.action !== "UNSUPPORTED") {
+  if (
+    plan.action !== "MOVE" &&
+    plan.action !== "REVIEW" &&
+    plan.action !== "DUPLICATE" &&
+    plan.action !== "UNSUPPORTED" &&
+    plan.action !== "CREATE_FOLDER_AND_MOVE"
+  ) {
     throw new Error(`Azione non mutabile: ${plan.action}`);
   }
   if (plan.action === "DUPLICATE" && !plan.duplicateOfFileId) {
@@ -503,33 +806,150 @@ function applyFileActionPlan(
   }
   assertDriveMutationDeadline(deadlineEpochMs);
   const originalFilename = file.getName();
-  const resolved = resolveTrustedDestinationFolder(
-    plan,
-    config,
-    context,
-    index,
-  );
+  const createdResolution =
+    plan.action === "CREATE_FOLDER_AND_MOVE"
+      ? createTrustedProposedDestinationFolder(
+          file,
+          plan,
+          config,
+          context,
+          index,
+          deadlineEpochMs,
+        )
+      : null;
+  const resolved =
+    createdResolution ??
+    resolveTrustedDestinationFolder(plan, config, context, index);
+  let destinationFolder = resolved.folder;
+  let destinationPath = resolved.path;
+  let effectiveAction: LogAction = plan.action;
+  let effectiveDuplicateOfFileId = plan.duplicateOfFileId;
+  let effectivePossibleDuplicateIds = plan.possibleDuplicateOfFileIds.slice();
+  const createdFolders: CreatedFolderRecord[] = [];
+  if (createdResolution !== null) {
+    createdFolders.push(createdResolution.createdFolder);
+  } else if (resolved.created) {
+    createdFolders.push({
+      id: resolved.folder.getId(),
+      path: resolved.path,
+      purpose: "DUPLICATES",
+    });
+  }
   // destinationFilename has already been derived by trusted application code.
   // Reinterpreting it as an AI suggestion here would sanitize an unchanged
   // original name and violate RENAME_FILES=false.
-  const desiredFilename = selectPlannedDestinationFilename(
+  let desiredFilename = selectPlannedDestinationFilename(
     originalFilename,
     plan.destinationFilename,
   );
   let availableFilename: string;
+  let dynamicDuplicate: ExactDuplicateResult | null = null;
   try {
+    if (createdResolution !== null) {
+      // A manual/concurrent actor may put a file into the new folder between
+      // creation and move. Preserve the normal exact-duplicate and collision
+      // policies instead of assuming the destination stayed empty.
+      dynamicDuplicate = findExactDuplicate(
+        file,
+        createdResolution.folder,
+        config,
+        deadlineEpochMs,
+      );
+      effectivePossibleDuplicateIds = uniqueStrings([
+        ...effectivePossibleDuplicateIds,
+        ...dynamicDuplicate.possibleDuplicateFileIds,
+      ]);
+      if (dynamicDuplicate.isDuplicate) {
+        assertDynamicExactDuplicateStillMatches(
+          file,
+          dynamicDuplicate,
+          createdResolution.folder.getId(),
+          config,
+        );
+        const duplicateDestination = getOrCreateDuplicatesFolder(
+          createdResolution.folder,
+          config,
+        );
+        if (duplicateDestination.folder === null) {
+          throw new Error("Dynamic duplicate destination could not be resolved.");
+        }
+        destinationFolder = duplicateDestination.folder;
+        destinationPath = `${createdResolution.path}/${config.duplicateFolderName}`;
+        effectiveAction = "DUPLICATE";
+        effectiveDuplicateOfFileId = dynamicDuplicate.duplicateOfFileId;
+        desiredFilename = generateNonConflictingFilename(
+          createdResolution.folder,
+          originalFilename,
+        );
+        if (duplicateDestination.created) {
+          createdFolders.push({
+            id: duplicateDestination.folder.getId(),
+            path: destinationPath,
+            purpose: "DUPLICATES",
+          });
+        }
+      }
+    }
+
     availableFilename = generateNonConflictingFilename(
-      resolved.folder,
+      destinationFolder,
       desiredFilename,
     );
+
+    if (createdResolution !== null) {
+      assertFileStillInInbox(file, config);
+      assertFileMatchesSnapshot(file, plan.sourceSnapshot);
+      assertLiveFolderCreationEvidence(
+        createdResolution.validatedProposal,
+        config,
+        context,
+        index,
+      );
+      assertCreatedFolderStillUnique(
+        createdResolution.folder,
+        createdResolution.parent,
+        createdResolution.validatedProposal.proposal.proposedSegments[0],
+        createdResolution.createdFolder.id,
+      );
+      if (dynamicDuplicate?.isDuplicate) {
+        assertDynamicExactDuplicateStillMatches(
+          file,
+          dynamicDuplicate,
+          createdResolution.folder.getId(),
+          config,
+        );
+      }
+      if (
+        destinationFolder !== createdResolution.folder &&
+        (!folderIsDirectChildOfFolder(
+          destinationFolder,
+          createdResolution.folder.getId(),
+        ) ||
+          normalizeFolderNameForLookup(destinationFolder.getName()) !==
+            normalizeFolderNameForLookup(config.duplicateFolderName))
+      ) {
+        throw new Error(
+          "The dynamic duplicate folder is no longer the trusted direct child.",
+        );
+      }
+    }
     assertDriveMutationDeadline(deadlineEpochMs);
-    file.moveTo(resolved.folder);
+    file.moveTo(destinationFolder);
   } catch (error: unknown) {
-    if (resolved.created) {
+    if (createdFolders.length > 0) {
+      if (createdResolution !== null) {
+        invalidateFolderIndexAfterCreationRace(
+          index,
+          "A post-creation destination, evidence, duplicate, collision, or move check failed.",
+        );
+      }
+      const lastCreated = createdFolders[createdFolders.length - 1];
       throw new PartialFolderCreationError(
         error,
-        resolved.folder.getId(),
-        resolved.path,
+        lastCreated.id,
+        lastCreated.path,
+        lastCreated.purpose,
+        createdFolders,
       );
     }
     throw error;
@@ -541,7 +961,7 @@ function applyFileActionPlan(
       file.setName(availableFilename);
     }
 
-    if (!fileIsDirectChildOfFolder(file, resolved.folder.getId())) {
+    if (!fileIsDirectChildOfFolder(file, destinationFolder.getId())) {
       throw new Error("Post-condizione fallita: destinazione Drive non verificata.");
     }
     resultingFilename = file.getName();
@@ -552,20 +972,36 @@ function applyFileActionPlan(
     } catch (_metadataError) {
       // Keep the planned name when post-move metadata cannot be read.
     }
+    if (createdResolution !== null) {
+      invalidateFolderIndexAfterCreationRace(
+        index,
+        "A post-move check failed after taxonomy folder creation; rebuild required.",
+      );
+    }
     throw new PartialDriveMutationError(
       `Il file è stato spostato, ma una fase successiva è fallita: ${getErrorMessage(error)}`,
-      resolved.folder.getId(),
-      resolved.path,
+      destinationFolder.getId(),
+      destinationPath,
       observedFilename,
+      effectiveAction,
+      createdFolders,
+      effectiveDuplicateOfFileId,
+      effectivePossibleDuplicateIds,
     );
   }
 
   return {
-    destinationFolderId: resolved.folder.getId(),
-    destinationPath: resolved.path,
+    destinationFolderId: destinationFolder.getId(),
+    destinationPath,
     resultingFilename,
     moved: true,
     renamed: shouldRename,
-    createdFolder: resolved.created,
+    createdFolder: createdFolders.length > 0,
+    createdFolderId: createdFolders[0]?.id ?? null,
+    createdFolderPath: createdFolders[0]?.path ?? null,
+    effectiveAction,
+    createdFolders,
+    duplicateOfFileId: effectiveDuplicateOfFileId,
+    possibleDuplicateOfFileIds: effectivePossibleDuplicateIds,
   };
 }

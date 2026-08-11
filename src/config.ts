@@ -16,6 +16,12 @@ const CONFIG_DEFAULTS = Object.freeze({
   triggerMinutes: 15,
   allowFolderCreation: false,
   fallbackFolderName: "Altro",
+  folderCreationMode: "OFF" as FolderCreationMode,
+  folderCreationConfidenceThreshold: 0.97,
+  folderCreationMaxFinalDepth: 10,
+  folderCreationMaxNewSegments: 1,
+  folderCreationMinSiblingEvidence: 2,
+  folderCreationSemanticGroups: [["IMU", "TARI", "TASI"]],
 });
 
 const DRIVE_ID_PATTERN = /^[A-Za-z0-9_-]{10,}$/;
@@ -70,6 +76,17 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   let excludedFolderIds: string[] = [];
   let allowFolderCreation: boolean = CONFIG_DEFAULTS.allowFolderCreation;
   let fallbackFolderName: string = CONFIG_DEFAULTS.fallbackFolderName;
+  let folderCreationMode: FolderCreationMode =
+    CONFIG_DEFAULTS.folderCreationMode;
+  let folderCreationConfidenceThreshold: number =
+    CONFIG_DEFAULTS.folderCreationConfidenceThreshold;
+  let folderCreationMaxFinalDepth: number = maxFolderDepth;
+  let folderCreationMaxNewSegments: number =
+    CONFIG_DEFAULTS.folderCreationMaxNewSegments;
+  let folderCreationMinSiblingEvidence: number =
+    CONFIG_DEFAULTS.folderCreationMinSiblingEvidence;
+  let folderCreationSemanticGroups: string[][] =
+    CONFIG_DEFAULTS.folderCreationSemanticGroups.map((group) => group.slice());
 
   dryRun = readConfigValue(
     () => parseBoolean(properties.DRY_RUN, CONFIG_DEFAULTS.dryRun, "DRY_RUN"),
@@ -235,6 +252,63 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     allowFolderCreation,
     problems,
   );
+  folderCreationMode = readConfigValue(
+    () =>
+      parseFolderCreationMode(
+        properties.FOLDER_CREATION_MODE,
+        CONFIG_DEFAULTS.folderCreationMode,
+      ),
+    folderCreationMode,
+    problems,
+  );
+  folderCreationConfidenceThreshold = readConfigValue(
+    () =>
+      parseFloatNumber(
+        properties.FOLDER_CREATION_CONFIDENCE_THRESHOLD,
+        CONFIG_DEFAULTS.folderCreationConfidenceThreshold,
+        "FOLDER_CREATION_CONFIDENCE_THRESHOLD",
+        0,
+        1,
+      ),
+    folderCreationConfidenceThreshold,
+    problems,
+  );
+  folderCreationMaxFinalDepth = readConfigValue(
+    () =>
+      parseInteger(
+        properties.FOLDER_CREATION_MAX_FINAL_DEPTH,
+        maxFolderDepth,
+        "FOLDER_CREATION_MAX_FINAL_DEPTH",
+        1,
+        100,
+      ),
+    maxFolderDepth,
+    problems,
+  );
+  folderCreationMaxNewSegments = readConfigValue(
+    () =>
+      parseInteger(
+        properties.FOLDER_CREATION_MAX_NEW_SEGMENTS,
+        CONFIG_DEFAULTS.folderCreationMaxNewSegments,
+        "FOLDER_CREATION_MAX_NEW_SEGMENTS",
+        1,
+        10,
+      ),
+    folderCreationMaxNewSegments,
+    problems,
+  );
+  folderCreationMinSiblingEvidence = readConfigValue(
+    () =>
+      parseInteger(
+        properties.FOLDER_CREATION_MIN_SIBLING_EVIDENCE,
+        CONFIG_DEFAULTS.folderCreationMinSiblingEvidence,
+        "FOLDER_CREATION_MIN_SIBLING_EVIDENCE",
+        2,
+        100,
+      ),
+    folderCreationMinSiblingEvidence,
+    problems,
+  );
 
   const configuredDuplicateFolderName = readOptionalNameProperty(
     properties,
@@ -255,6 +329,18 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   if (configuredFallbackFolderName !== null) {
     fallbackFolderName = configuredFallbackFolderName;
   }
+
+  folderCreationSemanticGroups = readConfigValue(
+    () =>
+      parseFolderCreationSemanticGroups(
+        properties.FOLDER_CREATION_SEMANTIC_GROUPS_JSON,
+        CONFIG_DEFAULTS.folderCreationSemanticGroups,
+        duplicateFolderName,
+        fallbackFolderName,
+      ),
+    folderCreationSemanticGroups,
+    problems,
+  );
 
   excludedFolderIds = parseCsvStrings(properties.EXCLUDED_FOLDER_IDS);
   excludedFolderIds.forEach((folderId) => {
@@ -292,6 +378,50 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   }
   if (retryMaxDelayMs < retryBaseDelayMs) {
     problems.push("RETRY_MAX_DELAY_MS must be greater than or equal to RETRY_BASE_DELAY_MS.");
+  }
+  if (folderCreationMaxFinalDepth > maxFolderDepth) {
+    problems.push(
+      "FOLDER_CREATION_MAX_FINAL_DEPTH must be less than or equal to MAX_FOLDER_DEPTH.",
+    );
+  }
+  if (
+    folderCreationMode !== "OFF" &&
+    folderCreationConfidenceThreshold < confidenceThreshold
+  ) {
+    problems.push(
+      "FOLDER_CREATION_CONFIDENCE_THRESHOLD must be greater than or equal to CONFIDENCE_THRESHOLD when folder proposals are enabled.",
+    );
+  }
+  if (folderCreationMaxNewSegments > folderCreationMaxFinalDepth) {
+    problems.push(
+      "FOLDER_CREATION_MAX_NEW_SEGMENTS must be less than or equal to FOLDER_CREATION_MAX_FINAL_DEPTH.",
+    );
+  }
+  if (
+    folderCreationMode !== "OFF" &&
+    folderCreationMaxFinalDepth < 2
+  ) {
+    problems.push(
+      "FOLDER_CREATION_MAX_FINAL_DEPTH must be at least 2 when FOLDER_CREATION_MODE is enabled because the root cannot be a creation parent.",
+    );
+  }
+  if (
+    folderCreationMode !== "OFF" &&
+    folderCreationMinSiblingEvidence > maxCandidateFolders
+  ) {
+    problems.push(
+      "FOLDER_CREATION_MIN_SIBLING_EVIDENCE must be less than or equal to MAX_CANDIDATE_FOLDERS.",
+    );
+  }
+  if (
+    folderCreationMode !== "OFF" &&
+    folderCreationSemanticGroups.some(
+      (group) => group.length < folderCreationMinSiblingEvidence + 1,
+    )
+  ) {
+    problems.push(
+      "Every semantic group must contain at least FOLDER_CREATION_MIN_SIBLING_EVIDENCE + 1 names when folder proposals are enabled.",
+    );
   }
   const normalizedDuplicateName = duplicateFolderName.toLowerCase();
   const normalizedFallbackName = fallbackFolderName.toLowerCase();
@@ -340,6 +470,12 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     excludedFolderIds,
     allowFolderCreation,
     fallbackFolderName,
+    folderCreationMode,
+    folderCreationConfidenceThreshold,
+    folderCreationMaxFinalDepth,
+    folderCreationMaxNewSegments,
+    folderCreationMinSiblingEvidence,
+    folderCreationSemanticGroups,
   };
 }
 
@@ -381,6 +517,12 @@ function getSafeConfigSummary(config: AppConfig): Record<string, unknown> {
     excludedFolderCount: config.excludedFolderIds.length,
     allowFolderCreation: config.allowFolderCreation,
     fallbackFolderName: config.fallbackFolderName,
+    folderCreationMode: config.folderCreationMode,
+    folderCreationConfidenceThreshold: config.folderCreationConfidenceThreshold,
+    folderCreationMaxFinalDepth: config.folderCreationMaxFinalDepth,
+    folderCreationMaxNewSegments: config.folderCreationMaxNewSegments,
+    folderCreationMinSiblingEvidence: config.folderCreationMinSiblingEvidence,
+    folderCreationSemanticGroupCount: config.folderCreationSemanticGroups.length,
   };
 }
 
@@ -407,6 +549,15 @@ function getSetupInstructions(): string {
     "- RENAME_FILES=false",
     "- ALLOW_FOLDER_CREATION=false",
     "- FALLBACK_FOLDER_NAME=Altro",
+    "- FOLDER_CREATION_MODE=OFF (allowed: OFF, SUGGEST, AUTO)",
+    "- FOLDER_CREATION_CONFIDENCE_THRESHOLD=0.97",
+    "- FOLDER_CREATION_MAX_FINAL_DEPTH=MAX_FOLDER_DEPTH (default)",
+    "- FOLDER_CREATION_MAX_NEW_SEGMENTS=1",
+    "- FOLDER_CREATION_MIN_SIBLING_EVIDENCE=2",
+    '- FOLDER_CREATION_SEMANTIC_GROUPS_JSON=[["IMU","TARI","TASI"]]',
+    "  Semantic AUTO creation is allowed only inside one configured name group; [] disables it.",
+    "  ALLOW_FOLDER_CREATION controls only the legacy empty-tree fallback;",
+    "  FOLDER_CREATION_MODE separately controls review-driven proposals.",
     "",
     "Resource/rate defaults (all optional):",
     "- MAX_INPUT_BYTES=10485760",
@@ -479,6 +630,113 @@ function isSafeFolderName(value: string): boolean {
     value !== ".." &&
     !/[\\/\u0000-\u001F\u007F]/.test(value)
   );
+}
+
+function parseFolderCreationMode(
+  value: string | null | undefined,
+  fallback: FolderCreationMode = CONFIG_DEFAULTS.folderCreationMode,
+): FolderCreationMode {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  if (
+    normalized === "OFF" ||
+    normalized === "SUGGEST" ||
+    normalized === "AUTO"
+  ) {
+    return normalized;
+  }
+  throw new Error("FOLDER_CREATION_MODE must be OFF, SUGGEST, or AUTO.");
+}
+
+function parseFolderCreationSemanticGroups(
+  value: string | null | undefined,
+  fallback: readonly (readonly string[])[],
+  duplicateFolderName: string,
+  fallbackFolderName: string,
+): string[][] {
+  if (value === null || value === undefined || value.trim() === "") {
+    return fallback.map((group) => group.slice());
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (_error) {
+    throw new Error(
+      "FOLDER_CREATION_SEMANTIC_GROUPS_JSON must be valid JSON.",
+    );
+  }
+  if (!Array.isArray(parsed) || parsed.length > 50) {
+    throw new Error(
+      "FOLDER_CREATION_SEMANTIC_GROUPS_JSON must be an array with at most 50 groups.",
+    );
+  }
+
+  const reservedNames = new Set([
+    "da smistare",
+    "da controllare",
+    "duplicati",
+    duplicateFolderName.normalize("NFKC").trim().toLowerCase(),
+    fallbackFolderName.normalize("NFKC").trim().toLowerCase(),
+  ]);
+  const normalizedGroupKeys = new Set<string>();
+  const groups: string[][] = [];
+  let memberCount = 0;
+
+  parsed.forEach((rawGroup, groupIndex) => {
+    if (!Array.isArray(rawGroup) || rawGroup.length < 3 || rawGroup.length > 50) {
+      throw new Error(
+        `FOLDER_CREATION_SEMANTIC_GROUPS_JSON group ${groupIndex} must contain 3..50 names.`,
+      );
+    }
+    const normalizedNames = new Set<string>();
+    const group: string[] = [];
+    rawGroup.forEach((rawName, nameIndex) => {
+      if (
+        typeof rawName !== "string" ||
+        rawName !== rawName.trim() ||
+        rawName.length < 1 ||
+        rawName.length > 100 ||
+        !isSafeFolderName(rawName) ||
+        sanitizeFolderName(rawName) !== rawName
+      ) {
+        throw new Error(
+          `FOLDER_CREATION_SEMANTIC_GROUPS_JSON group ${groupIndex} name ${nameIndex} is not a safe 1..100 character folder name.`,
+        );
+      }
+      const normalized = rawName.normalize("NFKC").trim().toLowerCase();
+      if (reservedNames.has(normalized)) {
+        throw new Error(
+          `FOLDER_CREATION_SEMANTIC_GROUPS_JSON group ${groupIndex} contains a reserved operational name.`,
+        );
+      }
+      if (normalizedNames.has(normalized)) {
+        throw new Error(
+          `FOLDER_CREATION_SEMANTIC_GROUPS_JSON group ${groupIndex} contains equivalent duplicate names.`,
+        );
+      }
+      normalizedNames.add(normalized);
+      group.push(rawName);
+      memberCount += 1;
+      if (memberCount > 500) {
+        throw new Error(
+          "FOLDER_CREATION_SEMANTIC_GROUPS_JSON cannot exceed 500 total names.",
+        );
+      }
+    });
+    const groupKey = Array.from(normalizedNames).sort().join("\u0000");
+    if (normalizedGroupKeys.has(groupKey)) {
+      throw new Error(
+        "FOLDER_CREATION_SEMANTIC_GROUPS_JSON contains duplicate groups.",
+      );
+    }
+    normalizedGroupKeys.add(groupKey);
+    groups.push(group);
+  });
+  return groups;
 }
 
 function validateRequiredDriveId(

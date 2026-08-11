@@ -22,6 +22,7 @@ function runSorter(): void {
           unsupported: 0,
           errors: 0,
           skipped: 1,
+          ...folderCreationBatchCounters(totals),
           elapsedMs: Date.now() - startedAt,
           message: "Another runSorter execution holds the script lock.",
         }),
@@ -42,6 +43,7 @@ function runSorter(): void {
         unsupported: 0,
         errors: 0,
         skipped: 0,
+        ...folderCreationBatchCounters(totals),
         elapsedMs: Date.now() - startedAt,
         message: safeJsonStringify(getSafeConfigSummary(config)),
       }),
@@ -58,6 +60,12 @@ function runSorter(): void {
       }
     }
 
+    if (!index.isComplete) {
+      throw new ConfigurationError([
+        index.invalidReason ||
+          "The folder index is incomplete; processing was refused.",
+      ]);
+    }
     if (index.folders.length > config.maxCandidateFolders) {
       throw new ConfigurationError([
         `The Drive tree has at least ${index.folders.length} candidate folders, above MAX_CANDIDATE_FOLDERS=${config.maxCandidateFolders}. Traversal stopped and no truncated candidate list was sent to Gemini.`,
@@ -73,6 +81,12 @@ function runSorter(): void {
       deadlineEpochMs,
     );
     mergeFileProcessingSummary(totals, processed);
+    if (!index.isComplete) {
+      throw new Error(
+        index.invalidReason ||
+          "Trusted folder index became incomplete; the batch was stopped.",
+      );
+    }
 
     const deadlineReached = Date.now() >= deadlineEpochMs - 30_000;
     logBatch(
@@ -87,12 +101,18 @@ function runSorter(): void {
         unsupported: totals.unsupported,
         errors: totals.errors,
         skipped: totals.skipped,
+        ...folderCreationBatchCounters(totals),
         elapsedMs: Date.now() - startedAt,
         message: [
           `candidateFolders=${index.folders.length}`,
           `fallbackCreated=${fallbackCreated}`,
           `deadlineGuardReached=${deadlineReached}`,
-          config.dryRun ? "countsArePlannedActions=true" : "countsAreAppliedActions=true",
+          `indexComplete=${index.isComplete}`,
+          config.folderCreationMode === "SUGGEST"
+            ? "countsAreReadOnlySuggestions=true"
+            : config.dryRun
+              ? "countsArePlannedActions=true"
+              : "countsAreAppliedActions=true",
         ].join("; "),
       }),
     );
@@ -110,6 +130,7 @@ function runSorter(): void {
         unsupported: totals.unsupported,
         errors: totals.errors,
         skipped: totals.skipped,
+        ...folderCreationBatchCounters(totals),
         elapsedMs: Date.now() - startedAt,
         message: getErrorMessage(error),
       }),
@@ -173,6 +194,21 @@ function processInbox(
         deadlineEpochMs,
       );
       mergeFileProcessingSummary(totals, result);
+      if (!index.isComplete) {
+        console.error(
+          safeJsonStringify({
+            timestamp: isoTimestamp(),
+            event: "FOLDER_INDEX_INVALIDATED",
+            runId,
+            fileId,
+            action: "ERROR",
+            reason:
+              index.invalidReason ||
+              "Trusted folder index became incomplete; remaining batch stopped.",
+          }),
+        );
+        break;
+      }
     } catch (error: unknown) {
       // processFile isolates normal per-file failures. This final guard protects
       // the rest of the batch even if logging or metadata access also fails.
@@ -189,10 +225,34 @@ function processInbox(
           reason: "File left in inbox when possible; batch continues.",
         }),
       );
+      if (!index.isComplete) {
+        break;
+      }
     }
   }
 
   return totals;
+}
+
+function folderCreationBatchCounters(
+  summary: FileProcessingSummary,
+): Pick<
+  BatchLogRecord,
+  | "folderProposals"
+  | "acceptedFolderProposals"
+  | "rejectedFolderProposals"
+  | "folderProposalApiErrors"
+  | "createdFolders"
+  | "partialFolderCreations"
+> {
+  return {
+    folderProposals: summary.folderProposals,
+    acceptedFolderProposals: summary.acceptedFolderProposals,
+    rejectedFolderProposals: summary.rejectedFolderProposals,
+    folderProposalApiErrors: summary.folderProposalApiErrors,
+    createdFolders: summary.createdFolders,
+    partialFolderCreations: summary.partialFolderCreations,
+  };
 }
 
 function readDryRunForDiagnostic(): boolean {

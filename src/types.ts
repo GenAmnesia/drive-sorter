@@ -6,6 +6,23 @@
  */
 
 type ConfigScope = "DRIVE" | "GEMINI" | "FULL";
+type FolderCreationMode = "OFF" | "SUGGEST" | "AUTO";
+type FolderCreationPatternType = "TEMPORAL" | "SEMANTIC" | "OTHER";
+type CreatedFolderPurpose = "TAXONOMY" | "DUPLICATES";
+
+interface CreatedFolderRecord {
+  id: string;
+  path: string;
+  purpose: CreatedFolderPurpose;
+}
+type FolderCreationDecision =
+  | "NOT_EVALUATED"
+  | "NO_CONTEXT"
+  | "MODEL_DECLINED"
+  | "REJECTED"
+  | "SUGGESTED"
+  | "AUTO_APPROVED"
+  | "API_ERROR";
 
 interface AppConfig {
   rootFolderId: string;
@@ -31,6 +48,12 @@ interface AppConfig {
   excludedFolderIds: string[];
   allowFolderCreation: boolean;
   fallbackFolderName: string;
+  folderCreationMode: FolderCreationMode;
+  folderCreationConfidenceThreshold: number;
+  folderCreationMaxFinalDepth: number;
+  folderCreationMaxNewSegments: number;
+  folderCreationMinSiblingEvidence: number;
+  folderCreationSemanticGroups: string[][];
 }
 
 interface FolderEntry {
@@ -43,14 +66,79 @@ interface FolderEntry {
 
 type FolderCandidate = FolderEntry;
 type FolderLookup = Record<string, FolderEntry>;
+type FolderChildrenLookup = Record<string, FolderEntry[]>;
+type FolderNameLookup = Record<string, FolderEntry[]>;
+type FolderChildrenByNameLookup = Record<string, FolderNameLookup>;
 
 interface FolderIndex {
   rootFolderId: string;
   folders: FolderEntry[];
   byId: FolderLookup;
+  childrenByParentId: FolderChildrenLookup;
+  childrenByNormalizedNameByParentId: FolderChildrenByNameLookup;
   excludedFolderIds: string[];
+  reservedNormalizedNames: string[];
+  isComplete: boolean;
+  invalidReason: string | null;
   builtAt: string;
 }
+
+/**
+ * Gemini may propose this value, but it never supplies a new Drive folder ID.
+ * Every parent and evidence ID must be resolved again through FolderIndex.
+ */
+interface FolderCreationProposal {
+  parentFolderId: string;
+  parentFolderPath: string;
+  proposedSegments: string[];
+  patternType: FolderCreationPatternType;
+  evidenceFolderIds: string[];
+  confidence: number;
+  reason: string;
+}
+
+interface TemporalSiblingEvidence {
+  parentFolderId: string;
+  parentFolderPath: string;
+  evidenceFolderIds: string[];
+  observedYears: number[];
+  minimumYear: number;
+  maximumYear: number;
+}
+
+interface FolderCreationContext {
+  parentFolderId: string;
+  parentFolderPath: string;
+  parentDepth: number;
+  childFolders: FolderEntry[];
+  temporalEvidence: TemporalSiblingEvidence | null;
+}
+
+interface ValidatedFolderCreationProposal {
+  proposal: FolderCreationProposal;
+  parentFolder: FolderEntry;
+  evidenceFolders: FolderEntry[];
+  finalPath: string;
+  finalDepth: number;
+}
+
+interface FolderCreationProposalEvaluation {
+  status: "NO_PROPOSAL" | "VALID" | "INVALID";
+  proposal: FolderCreationProposal | null;
+  errors: string[];
+}
+
+type FolderCreationValidationResult =
+  | {
+      valid: true;
+      value: ValidatedFolderCreationProposal;
+      errors: [];
+    }
+  | {
+      valid: false;
+      value: null;
+      errors: string[];
+    };
 
 interface ClassificationResult {
   targetFolderId: string | null;
@@ -172,6 +260,8 @@ type LogAction =
   | "MOVE"
   | "REVIEW"
   | "DUPLICATE"
+  | "SUGGEST_FOLDER"
+  | "CREATE_FOLDER_AND_MOVE"
   | "DRY_RUN"
   | "UNSUPPORTED"
   | "ERROR"
@@ -198,6 +288,10 @@ interface FileActionPlan {
   errorKind: ProcessingErrorKind | null;
   reason: string;
   requiresFolderCreation: boolean;
+  folderCreationProposal?: FolderCreationProposal | null;
+  folderCreationDecision?: FolderCreationDecision;
+  folderCreationProposalErrors?: string[];
+  folderCreationProposalRequestMade?: boolean;
 }
 
 interface StructuredLogError {
@@ -228,6 +322,15 @@ interface StructuredLogRecord {
   dryRun: boolean;
   durationMs: number | null;
   reason: string | null;
+  folderCreationMode?: FolderCreationMode;
+  folderCreationDecision?: FolderCreationDecision;
+  folderCreationProposal?: FolderCreationProposal | null;
+  folderCreationProposalErrors?: string[];
+  folderCreationThresholdPassed?: boolean | null;
+  createdFolderId?: string | null;
+  createdFolderPath?: string | null;
+  createdFolders?: CreatedFolderRecord[];
+  folderCreationPartialMutation?: boolean;
 }
 
 type BatchLogStatus =
@@ -251,4 +354,10 @@ interface BatchLogRecord {
   skipped: number;
   elapsedMs: number;
   message: string | null;
+  folderProposals?: number;
+  acceptedFolderProposals?: number;
+  createdFolders?: number;
+  rejectedFolderProposals?: number;
+  folderProposalApiErrors?: number;
+  partialFolderCreations?: number;
 }
