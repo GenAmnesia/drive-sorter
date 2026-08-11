@@ -839,6 +839,20 @@ function executeAndLogFilePlan(
 
   let applied: AppliedFileAction | null = null;
   try {
+    // Make the intended mutation durable before it happens. If this append
+    // fails, the following health check stops before Drive is touched.
+    logPersistentAuditIntent({
+      timestamp: isoTimestamp(),
+      event: "ACTION_INTENT",
+      runId,
+      fileId: file.getId(),
+      action: plan.action,
+      destinationFolderId: plan.destinationFolderId,
+      destinationPath: plan.destinationPath,
+      dryRun: false,
+      reason: plan.reason,
+    });
+    assertPersistentAuditLogHealthy();
     assertRuntimeBudgetForMutation(deadlineEpochMs);
     applied = applyFileActionPlan(
       file.getId(),

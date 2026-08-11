@@ -56,6 +56,9 @@ for (const path of typescriptFiles) {
     /\.moveTo\s*\(/,
     /\.setName\s*\(/,
     /\.createFolder\s*\(/,
+    /\bDocumentApp\.create\s*\(/,
+    /\.appendParagraph\s*\(/,
+    /\.saveAndClose\s*\(/,
   ]) {
     if (mutationPattern.test(source)) {
       assert.equal(
@@ -879,12 +882,120 @@ assert.equal(
 );
 assert.equal(evaluate("__suggestExecutionSummary.skipped"), 1);
 
+evaluate(`
+  globalThis.__persistentAuditLines = [];
+  globalThis.__persistentAuditSaves = 0;
+  globalThis.__persistentAuditMoves = 0;
+  globalThis.__persistentAuditFile = {
+    id: 'audit_document_1234567890',
+    name: '',
+    parentId: null,
+    getId: function () { return this.id; },
+    getName: function () { return this.name; },
+    moveTo: function (folder) {
+      globalThis.__persistentAuditMoves += 1;
+      this.parentId = folder.getId();
+    },
+    getParents: function () {
+      var parentId = this.parentId;
+      var done = false;
+      return {
+        hasNext: function () { return parentId !== null && !done; },
+        next: function () {
+          done = true;
+          return { getId: function () { return parentId; } };
+        }
+      };
+    }
+  };
+  globalThis.__persistentAuditDocument = {
+    getId: function () { return globalThis.__persistentAuditFile.id; },
+    saveAndClose: function () { globalThis.__persistentAuditSaves += 1; },
+    getBody: function () {
+      return {
+        appendParagraph: function (line) {
+          globalThis.__persistentAuditLines.push(line);
+          return {};
+        }
+      };
+    }
+  };
+  globalThis.DocumentApp = {
+    create: function (name) {
+      globalThis.__persistentAuditFile.name = name;
+      return globalThis.__persistentAuditDocument;
+    },
+    openById: function (id) {
+      if (id !== globalThis.__persistentAuditFile.id) {
+        throw new Error('Unexpected audit document ID');
+      }
+      return globalThis.__persistentAuditDocument;
+    }
+  };
+  globalThis.DriveApp = {
+    getFileById: function (id) {
+      if (id !== globalThis.__persistentAuditFile.id) {
+        throw new Error('Unexpected audit file ID');
+      }
+      return globalThis.__persistentAuditFile;
+    }
+  };
+  globalThis.__persistentAuditRoot = {
+    getId: function () { return 'root_1234567890'; }
+  };
+  globalThis.__persistentAuditInfo = startPersistentAuditLog(
+    globalThis.__persistentAuditRoot,
+    '2026-08-11T21:27:49.636Z_test-run',
+    0
+  );
+  logPersistentAuditIntent({
+    timestamp: new Date(0).toISOString(),
+    event: 'ACTION_INTENT',
+    runId: 'test-run',
+    fileId: 'file_1234567890',
+    action: 'MOVE',
+    destinationFolderId: 'target_1234567890',
+    destinationPath: 'Casa/Tributi',
+    dryRun: false,
+    reason: 'Verified test action intent.'
+  });
+  logBatch(createBatchLogRecord({
+    runId: 'test-run', status: 'COMPLETED', dryRun: true,
+    processed: 0, moved: 0, reviewed: 0, duplicates: 0,
+    unsupported: 0, errors: 0, skipped: 0, elapsedMs: 1,
+    message: 'persistent audit test'
+  }));
+  globalThis.__persistentAuditState = getPersistentAuditLogInfo();
+  finishPersistentAuditLog();
+`);
+const persistentAudit = JSON.parse(
+  evaluate(
+    "JSON.stringify({info:__persistentAuditInfo,state:__persistentAuditState,lines:__persistentAuditLines,moves:__persistentAuditMoves,saves:__persistentAuditSaves,file:__persistentAuditFile})",
+  ),
+);
+assert.equal(persistentAudit.moves, 1);
+assert.equal(persistentAudit.file.parentId, "root_1234567890");
+assert.match(persistentAudit.file.name, /^Drive Sorter Audit /);
+assert.equal(persistentAudit.lines.length, 3);
+assert.equal(persistentAudit.state.linesWritten, 3);
+assert.ok(
+  persistentAudit.saves >= 4,
+  "The new document and every persistent audit line must be saved and closed.",
+);
+assert.match(persistentAudit.lines[0], /AUDIT_LOG_STARTED/);
+assert.match(persistentAudit.lines[1], /ACTION_INTENT/);
+assert.match(persistentAudit.lines[2], /COMPLETED/);
+
 const manifest = JSON.parse(
   readFileSync(join(sourceRoot, "appsscript.json"), "utf8"),
 );
 assert.equal(manifest.runtimeVersion, "V8");
 assert.ok(
   manifest.oauthScopes.includes("https://www.googleapis.com/auth/drive"),
+);
+assert.ok(
+  manifest.oauthScopes.includes("https://www.googleapis.com/auth/documents"),
+  "Persistent Google Doc audit logging requires the minimum documents scope.",
 );
 
 console.log(

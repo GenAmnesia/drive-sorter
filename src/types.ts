@@ -361,3 +361,29 @@ interface BatchLogRecord {
   folderProposalApiErrors?: number;
   partialFolderCreations?: number;
 }
+
+/**
+ * Metadata for the append-only Google Doc created for one runSorter execution.
+ * The document contains only already-sanitized audit JSON records.
+ */
+interface PersistentAuditLogInfo {
+  documentId: string;
+  fileId: string;
+  filename: string;
+  rootFolderId: string;
+  startedAt: string;
+  linesWritten: number;
+}
+
+/** A durable intent marker written immediately before a live Drive mutation. */
+interface PersistentAuditIntentRecord {
+  timestamp: string;
+  event: "ACTION_INTENT" | "FALLBACK_FOLDER_CREATION_INTENT";
+  runId: string;
+  fileId: string | null;
+  action: LogAction | "CREATE_FALLBACK_FOLDER";
+  destinationFolderId: string | null;
+  destinationPath: string | null;
+  dryRun: boolean;
+  reason: string;
+}

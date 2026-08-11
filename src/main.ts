@@ -5,6 +5,7 @@ function runSorter(): void {
   const lock = LockService.getScriptLock();
   let lockAcquired = false;
   let config: AppConfig | null = null;
+  let context: DriveFolderContext | null = null;
   const totals = emptyFileProcessingSummary();
 
   try {
@@ -31,6 +32,12 @@ function runSorter(): void {
     }
 
     config = getAppConfig("FULL");
+    context = validateDriveConfiguration(config);
+    const persistentAuditLog = startPersistentAuditLog(
+      context.root,
+      runId,
+      startedAt,
+    );
     logBatch(
       createBatchLogRecord({
         runId,
@@ -45,15 +52,37 @@ function runSorter(): void {
         skipped: 0,
         ...folderCreationBatchCounters(totals),
         elapsedMs: Date.now() - startedAt,
-        message: safeJsonStringify(getSafeConfigSummary(config)),
+        message: safeJsonStringify({
+          ...getSafeConfigSummary(config),
+          persistentAuditDocumentId: persistentAuditLog.documentId,
+          persistentAuditFilename: persistentAuditLog.filename,
+        }),
       }),
     );
 
-    const context = validateDriveConfiguration(config);
     let index = buildFolderIndex(config, context);
     let fallbackCreated = false;
     const inboxHasFiles = context.inbox.getFiles().hasNext();
     if (index.folders.length === 0 && inboxHasFiles) {
+      if (
+        config.allowFolderCreation &&
+        !config.dryRun &&
+        config.folderCreationMode !== "SUGGEST"
+      ) {
+        logPersistentAuditIntent({
+          timestamp: isoTimestamp(),
+          event: "FALLBACK_FOLDER_CREATION_INTENT",
+          runId,
+          fileId: null,
+          action: "CREATE_FALLBACK_FOLDER",
+          destinationFolderId: context.root.getId(),
+          destinationPath: config.fallbackFolderName,
+          dryRun: false,
+          reason:
+            "Application-controlled fallback creation may occur because the trusted candidate index is empty.",
+        });
+        assertPersistentAuditLogHealthy();
+      }
       fallbackCreated = maybeCreateFallbackFolder(config, context, index);
       if (fallbackCreated) {
         index = buildFolderIndex(config, context);
@@ -118,7 +147,7 @@ function runSorter(): void {
     );
   } catch (error: unknown) {
     totals.errors += 1;
-    logBatch(
+    logBatchFailureSafely(
       createBatchLogRecord({
         runId,
         status: "FAILED",
@@ -136,6 +165,7 @@ function runSorter(): void {
       }),
     );
   } finally {
+    finishPersistentAuditLog();
     if (lockAcquired) {
       lock.releaseLock();
     }
@@ -158,21 +188,22 @@ function processInbox(
     totals.processed < config.maxFilesPerRun &&
     Date.now() < deadlineEpochMs - 30_000
   ) {
+    // If the per-run Google Doc cannot accept another record, do not begin a
+    // new file that might later require a Drive mutation without durable audit.
+    assertPersistentAuditLogHealthy();
     let file: GoogleAppsScript.Drive.File;
     try {
       file = files.next();
     } catch (error: unknown) {
       totals.errors += 1;
-      console.error(
-        safeJsonStringify({
-          timestamp: isoTimestamp(),
-          event: "INBOX_ITERATOR_ERROR",
-          runId,
-          error: getErrorMessage(error),
-          action: "ERROR",
-          reason: "Inbox iteration failed; batch stopped without mutating an unknown file.",
-        }),
-      );
+      logPersistentAuditEvent({
+        timestamp: isoTimestamp(),
+        event: "INBOX_ITERATOR_ERROR",
+        runId,
+        error: getErrorMessage(error),
+        action: "ERROR",
+        reason: "Inbox iteration failed; batch stopped without mutating an unknown file.",
+      });
       break;
     }
 
@@ -195,18 +226,16 @@ function processInbox(
       );
       mergeFileProcessingSummary(totals, result);
       if (!index.isComplete) {
-        console.error(
-          safeJsonStringify({
-            timestamp: isoTimestamp(),
-            event: "FOLDER_INDEX_INVALIDATED",
-            runId,
-            fileId,
-            action: "ERROR",
-            reason:
-              index.invalidReason ||
-              "Trusted folder index became incomplete; remaining batch stopped.",
-          }),
-        );
+        logPersistentAuditEvent({
+          timestamp: isoTimestamp(),
+          event: "FOLDER_INDEX_INVALIDATED",
+          runId,
+          fileId,
+          action: "ERROR",
+          reason:
+            index.invalidReason ||
+            "Trusted folder index became incomplete; remaining batch stopped.",
+        });
         break;
       }
     } catch (error: unknown) {
@@ -214,17 +243,15 @@ function processInbox(
       // the rest of the batch even if logging or metadata access also fails.
       totals.processed += 1;
       totals.errors += 1;
-      console.error(
-        safeJsonStringify({
-          timestamp: isoTimestamp(),
-          event: "FILE_GUARD_ERROR",
-          runId,
-          fileId,
-          error: getErrorMessage(error),
-          action: "ERROR",
-          reason: "File left in inbox when possible; batch continues.",
-        }),
-      );
+      logPersistentAuditEvent({
+        timestamp: isoTimestamp(),
+        event: "FILE_GUARD_ERROR",
+        runId,
+        fileId,
+        error: getErrorMessage(error),
+        action: "ERROR",
+        reason: "File left in inbox when possible; batch continues.",
+      });
       if (!index.isComplete) {
         break;
       }
@@ -232,6 +259,25 @@ function processInbox(
   }
 
   return totals;
+}
+
+/** A failed persistent log must not hide the original batch failure in console. */
+function logBatchFailureSafely(record: BatchLogRecord): void {
+  try {
+    logBatch(record);
+  } catch (loggingError: unknown) {
+    console.error(
+      safeJsonStringify({
+        timestamp: isoTimestamp(),
+        event: "BATCH_FAILURE_LOG_NOT_PERSISTED",
+        runId: record.runId,
+        error: getErrorMessage(loggingError),
+        action: "ERROR",
+        reason:
+          "The batch failure is visible in console, but the persistent audit document could not be updated.",
+      }),
+    );
+  }
 }
 
 function folderCreationBatchCounters(

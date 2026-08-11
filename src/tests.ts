@@ -31,6 +31,34 @@ function testDriveAccess(): void {
   );
 }
 
+/**
+ * Create one append-only audit Google Doc in ROOT_FOLDER_ID and write a small
+ * smoke-test record. Unlike the other manual tests, this intentionally writes
+ * only the audit document; it never reads, renames, or moves inbox files.
+ */
+function testPersistentAuditLog(): void {
+  const config = getAppConfig("DRIVE");
+  const context = validateDriveConfiguration(config);
+  const startedAt = Date.now();
+  const runId = createRunId();
+  const audit = startPersistentAuditLog(context.root, runId, startedAt);
+
+  try {
+    logPersistentAuditEvent({
+      timestamp: isoTimestamp(),
+      event: "TEST_PERSISTENT_AUDIT_LOG_COMPLETE",
+      runId,
+      auditDocumentId: audit.documentId,
+      auditFilename: audit.filename,
+      rootFolderId: context.root.getId(),
+      status: "ok",
+      driveModified: "audit_document_only",
+    });
+  } finally {
+    finishPersistentAuditLog();
+  }
+}
+
 /** Build and print the exact candidate tree without creating any folder. */
 function testFolderTree(): void {
   const config = getAppConfig("DRIVE");

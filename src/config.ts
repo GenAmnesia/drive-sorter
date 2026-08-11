@@ -16,12 +16,12 @@ const CONFIG_DEFAULTS = Object.freeze({
   triggerMinutes: 15,
   allowFolderCreation: false,
   fallbackFolderName: "Altro",
-  folderCreationMode: "OFF" as FolderCreationMode,
-  folderCreationConfidenceThreshold: 0.97,
+  folderCreationMode: "AUTO" as FolderCreationMode,
+  folderCreationConfidenceThreshold: 0.7,
   folderCreationMaxFinalDepth: 10,
   folderCreationMaxNewSegments: 1,
   folderCreationMinSiblingEvidence: 2,
-  folderCreationSemanticGroups: [["IMU", "TARI", "TASI"]],
+  folderCreationSemanticGroups: [] as string[][],
 });
 
 const DRIVE_ID_PATTERN = /^[A-Za-z0-9_-]{10,}$/;
@@ -46,7 +46,9 @@ class ConfigurationError extends Error {
  */
 function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   if (scope !== "DRIVE" && scope !== "GEMINI" && scope !== "FULL") {
-    throw new ConfigurationError(["Configuration scope must be DRIVE, GEMINI, or FULL."]);
+    throw new ConfigurationError([
+      "Configuration scope must be DRIVE, GEMINI, or FULL.",
+    ]);
   }
 
   const properties = PropertiesService.getScriptProperties().getProperties();
@@ -238,7 +240,12 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     problems,
   );
   renameFiles = readConfigValue(
-    () => parseBoolean(properties.RENAME_FILES, CONFIG_DEFAULTS.renameFiles, "RENAME_FILES"),
+    () =>
+      parseBoolean(
+        properties.RENAME_FILES,
+        CONFIG_DEFAULTS.renameFiles,
+        "RENAME_FILES",
+      ),
     renameFiles,
     problems,
   );
@@ -345,7 +352,9 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   excludedFolderIds = parseCsvStrings(properties.EXCLUDED_FOLDER_IDS);
   excludedFolderIds.forEach((folderId) => {
     if (!DRIVE_ID_PATTERN.test(folderId)) {
-      problems.push("Every EXCLUDED_FOLDER_IDS entry must be a valid Drive folder ID.");
+      problems.push(
+        "Every EXCLUDED_FOLDER_IDS entry must be a valid Drive folder ID.",
+      );
     }
   });
 
@@ -358,12 +367,11 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
       (id) => id !== "",
     );
     if (uniqueStrings(requiredIds).length !== requiredIds.length) {
-      problems.push("ROOT_FOLDER_ID, INBOX_FOLDER_ID, and REVIEW_FOLDER_ID must be distinct.");
+      problems.push(
+        "ROOT_FOLDER_ID, INBOX_FOLDER_ID, and REVIEW_FOLDER_ID must be distinct.",
+      );
     }
-    if (
-      rootFolderId !== "" &&
-      excludedFolderIds.includes(rootFolderId)
-    ) {
+    if (rootFolderId !== "" && excludedFolderIds.includes(rootFolderId)) {
       problems.push("EXCLUDED_FOLDER_IDS must not include ROOT_FOLDER_ID.");
     }
   }
@@ -377,7 +385,9 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     problems.push("TRIGGER_MINUTES must be one of 1, 5, 10, 15, or 30.");
   }
   if (retryMaxDelayMs < retryBaseDelayMs) {
-    problems.push("RETRY_MAX_DELAY_MS must be greater than or equal to RETRY_BASE_DELAY_MS.");
+    problems.push(
+      "RETRY_MAX_DELAY_MS must be greater than or equal to RETRY_BASE_DELAY_MS.",
+    );
   }
   if (folderCreationMaxFinalDepth > maxFolderDepth) {
     problems.push(
@@ -397,10 +407,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
       "FOLDER_CREATION_MAX_NEW_SEGMENTS must be less than or equal to FOLDER_CREATION_MAX_FINAL_DEPTH.",
     );
   }
-  if (
-    folderCreationMode !== "OFF" &&
-    folderCreationMaxFinalDepth < 2
-  ) {
+  if (folderCreationMode !== "OFF" && folderCreationMaxFinalDepth < 2) {
     problems.push(
       "FOLDER_CREATION_MAX_FINAL_DEPTH must be at least 2 when FOLDER_CREATION_MODE is enabled because the root cannot be a creation parent.",
     );
@@ -427,19 +434,21 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   const normalizedFallbackName = fallbackFolderName.toLowerCase();
   const reservedOperationalNames = ["da smistare", "da controllare"];
   if (reservedOperationalNames.includes(normalizedDuplicateName)) {
-    problems.push("DUPLICATE_FOLDER_NAME cannot use an inbox/review reserved name.");
+    problems.push(
+      "DUPLICATE_FOLDER_NAME cannot use an inbox/review reserved name.",
+    );
   }
   if (
-    [...reservedOperationalNames, "duplicati"].includes(
-      normalizedFallbackName,
-    )
+    [...reservedOperationalNames, "duplicati"].includes(normalizedFallbackName)
   ) {
     problems.push(
       "FALLBACK_FOLDER_NAME cannot use an inbox/review/Duplicati reserved name.",
     );
   }
   if (normalizedDuplicateName === normalizedFallbackName) {
-    problems.push("DUPLICATE_FOLDER_NAME and FALLBACK_FOLDER_NAME must be different.");
+    problems.push(
+      "DUPLICATE_FOLDER_NAME and FALLBACK_FOLDER_NAME must be different.",
+    );
   }
 
   if (problems.length > 0) {
@@ -522,7 +531,8 @@ function getSafeConfigSummary(config: AppConfig): Record<string, unknown> {
     folderCreationMaxFinalDepth: config.folderCreationMaxFinalDepth,
     folderCreationMaxNewSegments: config.folderCreationMaxNewSegments,
     folderCreationMinSiblingEvidence: config.folderCreationMinSiblingEvidence,
-    folderCreationSemanticGroupCount: config.folderCreationSemanticGroups.length,
+    folderCreationSemanticGroupCount:
+      config.folderCreationSemanticGroups.length,
   };
 }
 
@@ -549,12 +559,12 @@ function getSetupInstructions(): string {
     "- RENAME_FILES=false",
     "- ALLOW_FOLDER_CREATION=false",
     "- FALLBACK_FOLDER_NAME=Altro",
-    "- FOLDER_CREATION_MODE=OFF (allowed: OFF, SUGGEST, AUTO)",
+    "- FOLDER_CREATION_MODE=AUTO (allowed: OFF, SUGGEST, AUTO; DRY_RUN still protects document/taxonomy writes)",
     "- FOLDER_CREATION_CONFIDENCE_THRESHOLD=0.97",
     "- FOLDER_CREATION_MAX_FINAL_DEPTH=MAX_FOLDER_DEPTH (default)",
     "- FOLDER_CREATION_MAX_NEW_SEGMENTS=1",
     "- FOLDER_CREATION_MIN_SIBLING_EVIDENCE=2",
-    '- FOLDER_CREATION_SEMANTIC_GROUPS_JSON=[["IMU","TARI","TASI"]]',
+    "- FOLDER_CREATION_SEMANTIC_GROUPS_JSON=[]",
     "  Semantic AUTO creation is allowed only inside one configured name group; [] disables it.",
     "  ALLOW_FOLDER_CREATION controls only the legacy empty-tree fallback;",
     "  FOLDER_CREATION_MODE separately controls review-driven proposals.",
@@ -665,9 +675,7 @@ function parseFolderCreationSemanticGroups(
   try {
     parsed = JSON.parse(value);
   } catch (_error) {
-    throw new Error(
-      "FOLDER_CREATION_SEMANTIC_GROUPS_JSON must be valid JSON.",
-    );
+    throw new Error("FOLDER_CREATION_SEMANTIC_GROUPS_JSON must be valid JSON.");
   }
   if (!Array.isArray(parsed) || parsed.length > 50) {
     throw new Error(
@@ -687,7 +695,11 @@ function parseFolderCreationSemanticGroups(
   let memberCount = 0;
 
   parsed.forEach((rawGroup, groupIndex) => {
-    if (!Array.isArray(rawGroup) || rawGroup.length < 3 || rawGroup.length > 50) {
+    if (
+      !Array.isArray(rawGroup) ||
+      rawGroup.length < 3 ||
+      rawGroup.length > 50
+    ) {
       throw new Error(
         `FOLDER_CREATION_SEMANTIC_GROUPS_JSON group ${groupIndex} must contain 3..50 names.`,
       );
@@ -768,10 +780,7 @@ function validateGeminiModel(value: string, problems: string[]): void {
     problems.push("GEMINI_MODEL is required for Gemini operations.");
     return;
   }
-  if (
-    value.length > 120 ||
-    !/^(?:models\/)?[A-Za-z0-9._-]+$/.test(value)
-  ) {
+  if (value.length > 120 || !/^(?:models\/)?[A-Za-z0-9._-]+$/.test(value)) {
     problems.push("GEMINI_MODEL contains unsupported characters.");
   }
 }

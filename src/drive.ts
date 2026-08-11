@@ -158,7 +158,74 @@ function createValidatedChildFolder(
   if (!isSafeFolderName(safeName)) {
     throw new Error("Nome cartella non valido; creazione rifiutata.");
   }
+  assertPersistentAuditLogHealthy();
   return parent.createFolder(safeName);
+}
+
+/**
+ * Build a deterministic-but-unique enough name for the append-only audit
+ * document. It deliberately contains no user document name or secret.
+ */
+function buildPersistentAuditLogFilename(
+  runId: string,
+  startedAtEpochMs: number,
+): string {
+  const timestamp = new Date(startedAtEpochMs)
+    .toISOString()
+    .replace(/[:.]/g, "-");
+  const safeRunId = runId
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .slice(-48);
+  return `Drive Sorter Audit ${timestamp} ${safeRunId}`.slice(0, 180);
+}
+
+/**
+ * Create the one audit document for a run and place only that new file in the
+ * configured root. This is intentionally the only audit-write exception to
+ * DRY_RUN/SUGGEST; it never changes a classified document or existing file.
+ */
+function createPersistentAuditDocument(
+  root: GoogleAppsScript.Drive.Folder,
+  runId: string,
+  startedAtEpochMs: number,
+): PersistentAuditLogInfo {
+  const filename = buildPersistentAuditLogFilename(runId, startedAtEpochMs);
+  const document = DocumentApp.create(filename);
+  const documentId = document.getId();
+  document.saveAndClose();
+
+  const auditFile = DriveApp.getFileById(documentId);
+  auditFile.moveTo(root);
+  if (!fileIsDirectChildOfFolder(auditFile, root.getId())) {
+    throw new Error(
+      "The newly created audit document could not be verified in ROOT_FOLDER_ID.",
+    );
+  }
+
+  return {
+    documentId,
+    fileId: auditFile.getId(),
+    filename: auditFile.getName(),
+    rootFolderId: root.getId(),
+    startedAt: isoTimestamp(new Date(startedAtEpochMs)),
+    linesWritten: 0,
+  };
+}
+
+/**
+ * Persist exactly one already-sanitized JSON record. Opening and closing for
+ * each line makes completed records durable even if a later batch step fails.
+ */
+function appendPersistentAuditDocumentLine(
+  documentId: string,
+  serializedRecord: string,
+): void {
+  if (serializedRecord.trim() === "") {
+    throw new Error("Refusing to append an empty persistent audit record.");
+  }
+  const document = DocumentApp.openById(documentId);
+  document.getBody().appendParagraph(serializedRecord);
+  document.saveAndClose();
 }
 
 function getOrCreateDuplicatesFolder(
@@ -785,6 +852,7 @@ function applyFileActionPlan(
   if (config.dryRun) {
     throw new Error("Mutazione Drive rifiutata: DRY_RUN è attivo.");
   }
+  assertPersistentAuditLogHealthy();
   if (
     plan.action !== "MOVE" &&
     plan.action !== "REVIEW" &&

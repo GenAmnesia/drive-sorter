@@ -1,6 +1,139 @@
+let activePersistentAuditLog: PersistentAuditLogInfo | null = null;
+let persistentAuditLogFailure: string | null = null;
+
+class PersistentAuditLogError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PersistentAuditLogError";
+    Object.setPrototypeOf(this, PersistentAuditLogError.prototype);
+  }
+}
+
+/**
+ * Start the append-only audit document for one validated run. It is created
+ * before normal batch logging so a later failure still leaves a durable start
+ * marker in the root folder whenever creation succeeded.
+ */
+function startPersistentAuditLog(
+  root: GoogleAppsScript.Drive.Folder,
+  runId: string,
+  startedAtEpochMs: number,
+): PersistentAuditLogInfo {
+  if (activePersistentAuditLog !== null) {
+    throw new PersistentAuditLogError(
+      "A persistent audit log is already active for this execution.",
+    );
+  }
+
+  activePersistentAuditLog = createPersistentAuditDocument(
+    root,
+    runId,
+    startedAtEpochMs,
+  );
+  persistentAuditLogFailure = null;
+  logPersistentAuditEvent({
+    timestamp: isoTimestamp(),
+    event: "AUDIT_LOG_STARTED",
+    runId,
+    auditDocumentId: activePersistentAuditLog.documentId,
+    auditFilename: activePersistentAuditLog.filename,
+    rootFolderId: activePersistentAuditLog.rootFolderId,
+    dryRun: false,
+    reason:
+      "Persistent audit document initialized before document processing.",
+  });
+  return { ...activePersistentAuditLog };
+}
+
+/** End the in-memory session; every append is already saved and closed. */
+function finishPersistentAuditLog(): void {
+  activePersistentAuditLog = null;
+  persistentAuditLogFailure = null;
+}
+
+function getPersistentAuditLogInfo(): PersistentAuditLogInfo | null {
+  return activePersistentAuditLog === null
+    ? null
+    : { ...activePersistentAuditLog };
+}
+
+/**
+ * Abort later mutations after a persistence failure. A missing active log is
+ * tolerated for read-only manual tests and lock/configuration diagnostics.
+ */
+function assertPersistentAuditLogHealthy(): void {
+  if (persistentAuditLogFailure !== null) {
+    throw new PersistentAuditLogError(
+      `Persistent audit logging is unavailable: ${persistentAuditLogFailure}`,
+    );
+  }
+}
+
+function appendToPersistentAuditLog(serializedRecord: string): void {
+  if (activePersistentAuditLog === null) {
+    return;
+  }
+  assertPersistentAuditLogHealthy();
+  try {
+    appendPersistentAuditDocumentLine(
+      activePersistentAuditLog.documentId,
+      serializedRecord,
+    );
+    activePersistentAuditLog.linesWritten += 1;
+  } catch (error: unknown) {
+    persistentAuditLogFailure = getErrorMessage(error, 500);
+    console.error(
+      safeJsonStringify({
+        timestamp: isoTimestamp(),
+        event: "PERSISTENT_AUDIT_LOG_APPEND_FAILED",
+        auditDocumentId: activePersistentAuditLog.documentId,
+        error: persistentAuditLogFailure,
+        action: "ERROR",
+        reason:
+          "Further document and folder mutations are refused for this run.",
+      }),
+    );
+    throw new PersistentAuditLogError(
+      `Could not persist the audit record: ${persistentAuditLogFailure}`,
+    );
+  }
+}
+
+/** Console remains useful in the editor; the same sanitized line is persisted. */
+function emitAuditLine(serializedRecord: string): void {
+  console.log(serializedRecord);
+  appendToPersistentAuditLog(serializedRecord);
+}
+
+/** Emit an explicit before-mutation marker to the persistent audit document. */
+function logPersistentAuditIntent(record: PersistentAuditIntentRecord): void {
+  const sanitized: PersistentAuditIntentRecord = {
+    ...record,
+    timestamp: redactSensitiveText(record.timestamp),
+    runId: redactSensitiveText(record.runId),
+    fileId:
+      record.fileId === null ? null : redactSensitiveText(record.fileId),
+    destinationFolderId:
+      record.destinationFolderId === null
+        ? null
+        : redactSensitiveText(record.destinationFolderId),
+    destinationPath:
+      record.destinationPath === null
+        ? null
+        : truncateString(redactSensitiveText(record.destinationPath), 1_000),
+    reason: truncateString(redactSensitiveText(record.reason), 1_000),
+  };
+  emitAuditLine(safeJsonStringify(sanitized));
+}
+
+/** Persist a bounded lifecycle record that is not a normal file/batch result. */
+function logPersistentAuditEvent(record: Record<string, unknown>): void {
+  emitAuditLine(safeJsonStringify(record));
+}
+
 /** Emit one complete, single-line JSON record for a processed file. */
 function logOperation(record: StructuredLogRecord): void {
-  console.log(safeJsonStringify(sanitizeStructuredLogRecord(record)));
+  emitAuditLine(safeJsonStringify(sanitizeStructuredLogRecord(record)));
 }
 
 /** Alias with an explicit name for callers that prefer it. */
@@ -10,7 +143,7 @@ function logFileOperation(record: StructuredLogRecord): void {
 
 /** Emit one complete, single-line JSON record for a batch lifecycle event. */
 function logBatch(record: BatchLogRecord): void {
-  console.log(safeJsonStringify(sanitizeBatchLogRecord(record)));
+  emitAuditLine(safeJsonStringify(sanitizeBatchLogRecord(record)));
 }
 
 function logBatchEvent(record: BatchLogRecord): void {

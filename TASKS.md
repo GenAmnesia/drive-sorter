@@ -25,7 +25,7 @@ Checkboxes are marked complete only after implementation and an appropriate loca
 - [x] Validate that configured root, inbox, and review folders exist under the expected tree and are distinct.
 - [x] Implement one recursive folder index per run with folder ID and human-readable relative path, bounded by `MAX_FOLDER_DEPTH`, with one rebuild only after rare fallback creation.
 - [x] Exclude root, inbox, review, `Duplicati`, descendants of reserved folders, and configurable excluded folder IDs from normal candidates.
-- [x] Implement review-folder behavior for invalid/uncertain classifications and unsupported formats, with no write in DRY_RUN.
+- [x] Implement review-folder behavior for invalid/uncertain classifications and unsupported formats, with no classified-document write in DRY_RUN.
 - [x] Implement safe move operations that never delete or overwrite and re-check source/destination immediately before mutation.
 - [x] Keep rare folder creation application-controlled, strictly validated, opt-in, and completely disabled in DRY_RUN.
 
@@ -74,7 +74,7 @@ Checkboxes are marked complete only after implementation and an appropriate loca
 - [x] Execute `npm run push` to update the linked Apps Script project.
 - [x] Set `ROOT_FOLDER_ID`, `INBOX_FOLDER_ID`, `REVIEW_FOLDER_ID`, `GEMINI_API_KEY`, and `GEMINI_MODEL` in Apps Script Script Properties.
 - [x] Run `testDriveAccess`, `testGemini`, and `testFolderTree` in the Apps Script editor and approve required scopes.
-- [x] Run `runSorter` with `DRY_RUN=true`, review structured execution logs, and confirm that Drive remains unchanged.
+- [x] Run `runSorter` with `DRY_RUN=true`, review structured execution logs, and confirm that classified documents and folders remain unchanged.
 - [ ] After validating proposed actions, explicitly set `DRY_RUN=false` and optionally install the time trigger.
 
 ## 8. Autonomous folder proposals from review (new active scope)
@@ -87,7 +87,7 @@ application code remains the sole authority that validates and creates folders.
 ### 8.1 Behavior, configuration, and types
 
 - [x] Define a separate `FolderCreationProposal` contract containing trusted parent ID/path, one or more proposed leaf segments, pattern type, evidence folder IDs, confidence, and a short reason.
-- [x] Add `FOLDER_CREATION_MODE=OFF|SUGGEST|AUTO`, defaulting to `OFF`; `DRY_RUN=true` must override every mode and prohibit all Drive writes.
+- [x] Add `FOLDER_CREATION_MODE=OFF|SUGGEST|AUTO`, currently defaulting to `AUTO` while `DRY_RUN=true` protects classified documents and taxonomy; the later audit-log phase records the only intentional Drive-write exception.
 - [x] Add and validate `FOLDER_CREATION_CONFIDENCE_THRESHOLD`, with a conservative proposed default of `0.97` and an allowed range of `0..1`.
 - [x] Add and validate `FOLDER_CREATION_MAX_FINAL_DEPTH`, measured from the configured root, with a default no greater than the folder-index depth.
 - [x] Add `FOLDER_CREATION_MAX_NEW_SEGMENTS=1` by default so autonomous creation initially permits only a missing leaf, not an invented multi-level hierarchy.
@@ -122,7 +122,7 @@ application code remains the sole authority that validates and creates folders.
 - [x] Validate that every evidence ID exists, is non-reserved, shares the proposed parent, and meets `FOLDER_CREATION_MIN_SIBLING_EVIDENCE` after deduplication.
 - [x] Sanitize each proposed segment and reject blank names, control characters, slashes, dot segments, reserved names, IDs/URLs, and names exceeding Drive/config limits.
 - [x] Enforce both maximum new segments and maximum final depth in application code, independently of Gemini confidence.
-- [x] Reject proposals below `FOLDER_CREATION_CONFIDENCE_THRESHOLD`; in `SUGGEST` mode remain completely read-only, log the proposal/decision, and leave the document in inbox for manual review.
+- [x] Reject proposals below `FOLDER_CREATION_CONFIDENCE_THRESHOLD`; in `SUGGEST` mode do not modify classified documents or taxonomy, log the proposal/decision, and leave the document in inbox for manual review.
 - [x] If an equivalent child already exists case-insensitively, do not create another folder; leave the file for a fresh classification against the updated tree or safely reuse it only after full destination/duplicate validation.
 - [x] Validate temporal proposals deterministically against cited year siblings; treat semantic sibling proposals as higher-risk and require the same or a stricter confidence/evidence policy.
 - [x] In `OFF`/`AUTO`, route invalid, ambiguous, structurally weak, or over-depth proposals to `Da controllare`; in `SUGGEST` or on proposal API/infrastructure errors leave the file in inbox.
@@ -132,7 +132,7 @@ application code remains the sole authority that validates and creates folders.
 - [x] Add a single guarded `CREATE_FOLDER_AND_MOVE` mutation path; Gemini must never call Drive or supply the created folder ID.
 - [x] Immediately before creation, reopen the source by ID, verify its inbox parent and immutable snapshot, and revalidate the parent name/path, ancestry, exclusions, depth, and sibling evidence.
 - [x] Recheck for an equivalent child immediately before `createFolder` to prevent duplicate folders under concurrent/manual changes.
-- [x] In `DRY_RUN` and `SUGGEST` modes perform no `createFolder`, `moveTo`, or `setName`; log the exact proposed parent, leaf, final path, confidence, and evidence.
+- [x] In `DRY_RUN` and `SUGGEST` modes perform no creation/move/rename of classified documents or taxonomy; log the exact proposed parent, leaf, final path, confidence, and evidence. The later audit-log phase adds an intentional Google Doc-only exception.
 - [x] After successful creation, preserve existing collision, optional rename, exact-duplicate, and safe-move guarantees before moving the document.
 - [x] If an external actor creates the same child during the race window, abort safely and retry on a later run rather than merging into an unvalidated destination.
 - [x] Record partial outcomes explicitly when folder creation succeeds but move/rename/post-condition verification fails; never delete the newly created folder or any file.
@@ -156,3 +156,25 @@ application code remains the sole authority that validates and creates folders.
 - [ ] Exercise temporal, semantic, ambiguous, malicious-name, existing-folder, and over-depth cases and confirm that Drive remains unchanged.
 - [ ] Switch to `FOLDER_CREATION_MODE=AUTO` while still in `DRY_RUN`, and approve the exact planned folder paths from structured logs.
 - [ ] Enable live writes only for a small manual batch after proposal quality is demonstrated; verify created folders, moves, duplicates, collisions, and partial-failure logs before enabling any trigger.
+
+## 9. Persistent per-run Drive audit log (new active scope)
+
+The audit log is a deliberately narrow exception to the read-only document
+sorting policy: each acquired, validly configured `runSorter` execution creates
+one Google Doc under `ROOT_FOLDER_ID` and appends sanitized records as it runs.
+It never changes a classified document, renames an existing file, or deletes
+anything.
+
+- [x] Define persistent audit-log state and a bounded, non-secret document name derived from the run ID.
+- [x] Create one new Google Doc per valid acquired run, move only that newly created audit file into the configured root, and never overwrite an existing log.
+- [x] Initialize the audit document before the batch `STARTED` record and append every sanitized batch/file record immediately with `saveAndClose()`.
+- [x] Write an action-intent audit record before each live document mutation so an interrupted run remains traceable.
+- [x] Fail closed before further document/folder mutations when the persistent audit document cannot be updated; retain console diagnostics without logging secrets.
+- [x] Treat audit-document creation/update as the sole explicit Drive-write exception in `DRY_RUN` and `SUGGEST`; keep all classified documents and taxonomy folders unchanged in those modes.
+- [x] Add the minimum Google Docs OAuth scope, static/mock verification, and a clearly labeled manual audit-log smoke test.
+- [x] Update README safety, scope, rollout, and troubleshooting documentation for the audit exception and required reauthorization.
+- [x] Run typecheck, build, static verification, clasp status, and full diff/secret/destructive-operation review.
+
+### 9.1 Owner/manual verification
+
+- [ ] Push the audit-log change, authorize the additional Google Docs scope, run `runSorter` with `DRY_RUN=true`, and confirm a new `Drive Sorter Audit` document appears directly in `ROOT_FOLDER_ID` with progressive JSON records.

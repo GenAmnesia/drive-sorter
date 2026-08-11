@@ -4,16 +4,16 @@ Drive Sorter è un progetto Google Apps Script sviluppato localmente con `clasp`
 
 Il progetto non usa server o database esterni, non richiede il servizio Drive avanzato e parte in modalità sicura:
 
-- `DRY_RUN=true`: nessuno spostamento, rinomina o creazione di cartelle;
+- `DRY_RUN=true`: nessuno spostamento/rinomina di documenti o creazione di cartelle di smistamento; viene creato e aggiornato soltanto il Google Doc di audit del run;
 - `RENAME_FILES=false`: i suggerimenti di nome del modello non vengono applicati;
 - `ALLOW_FOLDER_CREATION=false`: il raro fallback applicativo è disabilitato;
-- `FOLDER_CREATION_MODE=OFF`: la creazione guidata dalla review è disabilitata;
+- `FOLDER_CREATION_MODE=AUTO`: può creare soltanto una foglia validata; `DRY_RUN=true` la mantiene pianificata e il default dei gruppi semantici è vuoto;
 - nessuna chiamata applicativa elimina o cestina file;
 - Gemini propone soltanto una classificazione JSON e non può invocare Drive;
 - output invalido, ambiguo o sotto soglia viene destinato a `Da controllare` quando le scritture sono abilitate;
 - errori API o infrastrutturali lasciano il file nella inbox.
 
-> **Prima di usare documenti reali:** `DRY_RUN` impedisce modifiche a Drive, ma esegue comunque le chiamate Gemini e quindi invia il contenuto dei documenti all'API. Leggere la sezione [Privacy e trattamento dei contenuti](#privacy-e-trattamento-dei-contenuti).
+> **Prima di usare documenti reali:** `DRY_RUN` impedisce modifiche a file classificati e cartelle di smistamento, ma crea il Google Doc di audit e continua a eseguire le chiamate Gemini, inviando il contenuto dei documenti all'API. Leggere la sezione [Privacy e trattamento dei contenuti](#privacy-e-trattamento-dei-contenuti).
 
 ## Come funziona
 
@@ -28,8 +28,8 @@ Per ogni esecuzione, `runSorter()`:
 7. valida a runtime ogni campo e la coppia esatta `folderId`/`path`;
 8. applica `CONFIDENCE_THRESHOLD` alla destinazione esistente e, se abilitato, valuta con una sola richiesta aggiuntiva una cartella foglia mancante usando una soglia distinta e più alta;
 9. se la creazione non è autorizzata, conserva la destinazione esistente quando supera la sua soglia normale; altrimenti, in `OFF`/`AUTO`, pianifica `Da controllare`;
-10. controlla duplicati e collisioni e applica un unico piano validato; in `DRY_RUN` e `SUGGEST` registra soltanto l'esito;
-11. emette log JSON per ogni file e per il batch.
+10. controlla duplicati e collisioni e applica un unico piano validato; in `DRY_RUN` e `SUGGEST` non modifica i documenti classificati;
+11. crea nella root un Google Doc di audit per il run e vi salva progressivamente log JSON di batch, file e intenti di mutazione.
 
 Il contenuto del documento è trattato nel prompt come dato non affidabile. Istruzioni presenti nel file, inclusi tentativi di prompt injection come “ignora le istruzioni precedenti”, non autorizzano alcuna operazione.
 
@@ -231,7 +231,7 @@ Tutte le proprietà sono stringhe nell'interfaccia Apps Script. Usare esattament
 
 | Proprietà | Default | Vincoli/comportamento |
 | --- | ---: | --- |
-| `DRY_RUN` | `true` | Blocca ogni mutazione Drive. |
+| `DRY_RUN` | `true` | Blocca move/rinomine e creazione di cartelle di smistamento; consente esclusivamente il nuovo Google Doc di audit e i suoi append. |
 | `CONFIDENCE_THRESHOLD` | `0.85` | Numero tra `0` e `1`; sotto soglia il file va in review. |
 | `MAX_FILES_PER_RUN` | `10` | Intero `1..100`. |
 | `MAX_FOLDER_DEPTH` | `10` | Intero `1..100`; i figli oltre il limite non sono candidati. |
@@ -249,12 +249,12 @@ Tutte le proprietà sono stringhe nell'interfaccia Apps Script. Usare esattament
 | `EXCLUDED_FOLDER_IDS` | vuoto | Lista CSV di folder ID, senza URL; esclude l'intero sottoalbero e non può contenere `ROOT_FOLDER_ID`. |
 | `ALLOW_FOLDER_CREATION` | `false` | Abilita soltanto il rarissimo fallback descritto sotto. |
 | `FALLBACK_FOLDER_NAME` | `Altro` | Nome applicativo fisso e validato, mai suggerito da Gemini. |
-| `FOLDER_CREATION_MODE` | `OFF` | `OFF`, `SUGGEST` o `AUTO`; `SUGGEST` è interamente read-only, `AUTO` abilita la sola creazione validata. |
+| `FOLDER_CREATION_MODE` | `AUTO` | `OFF`, `SUGGEST` o `AUTO`; `SUGGEST` non modifica documenti o cartelle tassonomiche, ma conserva il Google Doc di audit; `AUTO` abilita la sola creazione validata. |
 | `FOLDER_CREATION_CONFIDENCE_THRESHOLD` | `0.97` | Soglia `0..1` distinta; con `SUGGEST`/`AUTO` deve essere almeno `CONFIDENCE_THRESHOLD`. |
 | `FOLDER_CREATION_MAX_FINAL_DEPTH` | `MAX_FOLDER_DEPTH` | Profondità finale `1..100`, misurata dalla root e mai superiore a `MAX_FOLDER_DEPTH`. |
 | `FOLDER_CREATION_MAX_NEW_SEGMENTS` | `1` | Intero `1..10`; in questa versione `AUTO` accetta comunque esattamente una nuova foglia. |
 | `FOLDER_CREATION_MIN_SIBLING_EVIDENCE` | `2` | Intero `2..100`; numero minimo di cartelle sorelle reali e distinte da citare. |
-| `FOLDER_CREATION_SEMANTIC_GROUPS_JSON` | `[["IMU","TARI","TASI"]]` | Allowlist JSON per `SEMANTIC` in `AUTO`; gruppi di `3..50` nomi sicuri/univoci e almeno `MIN_SIBLING_EVIDENCE + 1`. `[]` disabilita l'autorizzazione automatica semantica. |
+| `FOLDER_CREATION_SEMANTIC_GROUPS_JSON` | `[]` | Allowlist JSON per `SEMANTIC` in `AUTO`; gruppi di `3..50` nomi sicuri/univoci e almeno `MIN_SIBLING_EVIDENCE + 1`. `[]` disabilita l'autorizzazione automatica semantica. |
 
 Esempio descrittivo, senza valori reali:
 
@@ -265,9 +265,9 @@ REVIEW_FOLDER_ID=ID_DA_CONTROLLARE
 GEMINI_API_KEY=CHIAVE_SALVATA_SOLO_NELLE_SCRIPT_PROPERTIES
 GEMINI_MODEL=gemini-3.5-flash-lite
 DRY_RUN=true
-FOLDER_CREATION_MODE=OFF
+FOLDER_CREATION_MODE=AUTO
 FOLDER_CREATION_CONFIDENCE_THRESHOLD=0.97
-FOLDER_CREATION_SEMANTIC_GROUPS_JSON=[["IMU","TARI","TASI"]]
+FOLDER_CREATION_SEMANTIC_GROUPS_JSON=[]
 ```
 
 Gli ID root, inbox e review devono essere tutti diversi. `DUPLICATE_FOLDER_NAME` non può coincidere con i nomi riservati o con i nomi effettivi di inbox/review. `FALLBACK_FOLDER_NAME` non può essere `Da smistare`, `Da controllare` o `Duplicati`, non può coincidere con inbox/review né con `DUPLICATE_FOLDER_NAME`.
@@ -316,10 +316,10 @@ Esempio: Gemini classifica un file verso `Casa/Roma/IMU` con confidenza `0.90`. 
 | Modalità | Nessuna creazione autorizzata | Scritture Drive |
 | --- | --- | --- |
 | `OFF` | Usa una destinazione esistente se raggiunge `CONFIDENCE_THRESHOLD`; altrimenti `Da controllare`. Non esegue la seconda richiesta Gemini. | Normali, salvo `DRY_RUN`. |
-| `SUGGEST` | Logga proposta e decisione e lascia sempre il file nella inbox, anche se esiste un fallback. | Nessuna: la modalità è interamente read-only. |
+| `SUGGEST` | Logga proposta e decisione e lascia sempre il file nella inbox, anche se esiste un fallback. | Nessuna su documenti/tassonomia; salva soltanto l'audit document append-only. |
 | `AUTO` | Usa il fallback esistente se raggiunge `CONFIDENCE_THRESHOLD`; altrimenti `Da controllare`. | Può creare e poi spostare soltanto dopo tutti i controlli. |
 
-`DRY_RUN=true` prevale su tutte le modalità e impedisce ogni scrittura.
+`DRY_RUN=true` prevale su tutte le modalità e impedisce ogni scrittura su documenti classificati e cartelle tassonomiche; l'audit document append-only resta intenzionalmente attivo.
 
 ## Proposte di nuove cartelle dalla review
 
@@ -399,21 +399,22 @@ Se esiste almeno una candidata ma nessuna è adatta, il fallback `Altro` non vie
 
 ## DRY_RUN e rollout consigliato
 
-Con `DRY_RUN=true` tutte le operazioni Drive del sorter sono di sola lettura:
+Con `DRY_RUN=true`, documenti e cartelle di smistamento restano in sola lettura. L'unica eccezione esplicita è il Google Doc di audit, creato direttamente in `ROOT_FOLDER_ID` e aggiornato per rendere il run consultabile anche fuori dalla retention dei log Apps Script:
 
 - nessun `moveTo`;
 - nessun `setName`;
 - nessuna cartella `Duplicati`, fallback o tassonomica creata;
+- viene creato un nuovo documento `Drive Sorter Audit …` e gli vengono aggiunte righe JSON sanificate: non sovrascrive log esistenti e non contiene il contenuto dei documenti analizzati;
 - preparazione, classificazione e validazione vengono comunque eseguite; collisioni e SHA-256 vengono controllati quando esiste una destinazione applicativa da pianificare;
 - un piano riuscito ha `action: "DRY_RUN"` e `wouldAction` indica anche eventuali `SUGGEST_FOLDER` o `CREATE_FOLDER_AND_MOVE`; un errore API/interno usa invece `action: "ERROR"` e lascia il file nella inbox.
 
-Anche `FOLDER_CREATION_MODE=SUGGEST` impedisce tutte le mutazioni, indipendentemente dal valore memorizzato di `DRY_RUN`: registra classificazione, proposta, evidenze e fallback, poi lascia il file in inbox. Lo stesso file può quindi consumare nuovamente una o due chiamate Gemini al run successivo.
+Anche `FOLDER_CREATION_MODE=SUGGEST` impedisce mutazioni su documenti e cartelle tassonomiche, indipendentemente dal valore memorizzato di `DRY_RUN`: registra classificazione, proposta, evidenze e fallback nel solo audit document e lascia il file in inbox. Lo stesso file può quindi consumare nuovamente una o due chiamate Gemini al run successivo.
 
 Rollout:
 
 1. configurare tutte le proprietà con `DRY_RUN=true` e `FOLDER_CREATION_MODE=OFF`;
 2. eseguire i test manuali di sola lettura, incluso `testFolderCreationProposal()`;
-3. impostare `FOLDER_CREATION_MODE=SUGGEST` e provare pochi documenti rappresentativi: Drive deve rimanere invariato;
+3. impostare `FOLDER_CREATION_MODE=SUGGEST` e provare pochi documenti rappresentativi: documenti e tassonomia devono rimanere invariati; apparirà soltanto un audit document per run;
 4. controllare parent/path, pattern, evidenze, proposta, entrambe le soglie e l'eventuale fallback esistente;
 5. provare casi temporali, semantici, ambigui, over-depth e contenenti prompt injection;
 6. impostare `FOLDER_CREATION_MODE=AUTO` mantenendo ancora `DRY_RUN=true` e verificare i piani `CREATE_FOLDER_AND_MOVE`;
@@ -432,6 +433,7 @@ Dopo `npm run push`, aprire l'editor con `npm run open`, selezionare una funzion
 | `testHashing()` | Self-test SHA-256 in memoria; nessun accesso Drive. |
 | `testFilenameCollision()` | Test puro di collisione/estensione; nessun accesso Drive. |
 | `testDriveAccess()` | Legge la inbox e logga nome, ID, MIME e size; nessuna modifica. |
+| `testPersistentAuditLog()` | Crea un solo Google Doc di audit nella root e scrive due record di smoke test; non legge, sposta o rinomina file della inbox. |
 | `testFolderTree()` | Costruisce e stampa l'indice candidato; nessuna creazione. |
 | `testGemini()` | Richiesta minima Gemini; nessun accesso Drive. |
 | `testFolderCreationProposal()` | Usa il primo file diretto della inbox e forza in memoria `DRY_RUN` + `SUGGEST`; prepara il documento e fa al massimo una richiesta proposta, senza modificare Drive. |
@@ -443,17 +445,18 @@ I primi test Drive/Gemini possono mostrare la schermata di consenso OAuth. Verif
 
 ## Autorizzazioni Apps Script
 
-Il manifest conserva la timezone preesistente `America/New_York`, usa il runtime V8 e tre scope espliciti:
+Il manifest conserva la timezone preesistente `America/New_York`, usa il runtime V8 e quattro scope espliciti:
 
 | Scope | Motivo |
 | --- | --- |
 | `https://www.googleapis.com/auth/drive` | Leggere l'albero, leggere blob, spostare/rinominare file e creare le sole cartelle consentite. |
+| `https://www.googleapis.com/auth/documents` | Creare e aggiornare il Google Doc di audit per ogni `runSorter`. |
 | `https://www.googleapis.com/auth/script.external_request` | Chiamare Gemini con `UrlFetchApp`. |
 | `https://www.googleapis.com/auth/script.scriptapp` | Creare e rimuovere i trigger espliciti. |
 
 Lo scope Drive è ampio: Google non offre uno scope “solo sposta file arbitrari” adatto a questo flusso. Il progetto limita le operazioni a livello di codice e verifica statica, ma l'autorizzazione OAuth in sé consente più di quanto il sorter esegua. Autorizzare soltanto account e progetto sotto il proprio controllo.
 
-Il progetto non abilita il Drive Advanced Service. La prima esecuzione viene autorizzata dall'utente al browser; un trigger installabile viene poi eseguito come l'utente che lo ha creato.
+Il progetto non abilita il Drive Advanced Service. Dopo il push di questa modifica, eseguire una funzione manuale e approvare la nuova autorizzazione Google Docs; un trigger installabile viene poi eseguito come l'utente che lo ha creato.
 
 ## Trigger
 
@@ -469,18 +472,20 @@ L'installazione è idempotente per l'utente corrente: se esiste già un trigger 
 
 ## Logging e audit
 
-La prima versione scrive una riga JSON con `console.log` per:
+Dopo lock, configurazione e root validi, ogni `runSorter()` crea un nuovo Google Doc con nome `Drive Sorter Audit …` direttamente in `ROOT_FOLDER_ID`. Non riusa né sovrascrive un audit precedente. La stessa riga JSON sanificata continua a essere inviata a `console.log` e viene anche aggiunta al documento, poi salvata e chiusa immediatamente, per:
 
 - inizio/fine/fallimento del batch (`event: "BATCH"`);
 - ogni file (`event: "FILE"`);
-- lock non acquisito;
-- funzioni di test e trigger.
+- un `ACTION_INTENT` prima di ogni mutazione live di file/cartelle;
+- l'eventuale intento di creare il fallback applicativo.
+
+Un run che non acquisisce il lock, oppure che non riesce ancora a validare proprietà/root, può scrivere soltanto nel log Apps Script perché non esiste una root affidabile in cui collocare un audit. Se l'append al Google Doc fallisce, il sorter non avvia ulteriori mutazioni di documenti o cartelle in quel run; il relativo errore resta nel log console. Un errore che avviene dopo lo spostamento può lasciare nel documento almeno l'intento precedente, ma non esiste una transazione Drive atomica.
 
 I record file includono timestamp, run ID, file ID, nome originale, MIME, size, classificazione, azione, azione pianificata in dry run, destinazione, filename risultante, duplicato esatto, possibili duplicati, categoria errore, durata e motivo. Per la creazione includono anche modalità, decisione, proposta validata e bounded, errori di validazione, esito soglia, ID/path realmente creati e indicatore di mutazione parziale; il contenuto del documento non viene loggato. Le azioni includono `MOVE`, `REVIEW`, `DUPLICATE`, `SUGGEST_FOLDER`, `CREATE_FOLDER_AND_MOVE`, `DRY_RUN`, `UNSUPPORTED`, `ERROR` e `SKIP`.
 
 Il record batch conta richieste di proposta, proposte accettate/rifiutate, errori API della seconda richiesta, cartelle realmente create ed esiti parziali. Una proposta accettata in `SUGGEST` è soltanto un suggerimento validato, non una cartella creata.
 
-Aprire **Apps Script → Esecuzioni**, selezionare il run e consultare i log. Non è incluso un Google Sheet di audit e i log seguono la retention della piattaforma. Chiavi con nomi sensibili e pattern comuni di API key/token vengono redatti; richieste e risposte Gemini complete non vengono loggate. Nomi file, folder path e ID sono invece dati operativi e possono essere sensibili: limitare l'accesso al progetto e ai log.
+Aprire il nuovo documento nella root oppure **Apps Script → Esecuzioni** per consultare il run. Non è incluso un Google Sheet di audit. Chiavi con nomi sensibili e pattern comuni di API key/token vengono redatti; richieste e risposte Gemini complete non vengono loggate. Nomi file, folder path e ID sono invece dati operativi e possono essere sensibili: limitare l'accesso alla root, al progetto e ai log.
 
 ## Free Tier, quote e retry
 
@@ -517,7 +522,7 @@ Queste regole possono cambiare e dipendono da regione, account, billing e modali
 - `npm run verify` controlla staticamente le chiamate vietate e impone che `moveTo`, `setName` e `createFolder` restino nel confine Drive sorvegliato.
 - Gemini riceve solo destinazioni, parent ed evidenze esistenti e non ha tool, credenziali o funzioni per modificare Drive; una nuova cartella non ha un ID finché non la crea il codice.
 - Ogni destinazione viene risolta nuovamente dall'indice affidabile subito prima della mutazione; la creazione ricontrolla anche parent/path, ancestry, evidenze, profondità e figli equivalenti sul Drive reale.
-- `DRY_RUN` e `SUGGEST` terminano prima del confine di mutazione; i test locali verificano entrambe le barriere.
+- `DRY_RUN` e `SUGGEST` terminano prima del confine che muta documenti classificati o cartelle tassonomiche; l'unica eccezione è il nuovo audit document append-only nella root, coperto da test separati.
 - Il file deve essere ancora non cestinato, figlio diretto della inbox e identico allo snapshot pre-classificazione per nome, MIME, size e data di modifica.
 - Non esiste sovrascrittura: ogni collisione produce un nome nuovo.
 - Errori per file sono isolati e non fermano il resto del batch.
@@ -547,6 +552,7 @@ Non assumere che un test riuscito in My Drive garantisca lo stesso comportamento
 - Tra controllo collisione e mutazione un attore esterno può creare una gara sul filename; Drive consente nomi uguali, quindi non avviene sovrascrittura, ma può servire revisione manuale.
 - Uno spostamento e una rinomina sono due chiamate Drive: se la seconda fallisce dopo la prima, il file può risultare già spostato con il nome originale. Il log segnala l'errore; ispezionare Drive senza eliminare nulla.
 - Creazione e spostamento sono chiamate separate: se la nuova cartella viene creata ma una verifica o il move fallisce, la cartella può restare vuota. Il log la registra come esito parziale e il codice non la elimina.
+- Se la creazione del nuovo audit document riesce ma il suo trasferimento nella root fallisce, il documento può restare nel My Drive dell'account: il batch non processa file e non elimina automaticamente quel documento.
 - Il rilevamento duplicati esatti non copre file Google Workspace nativi né file oltre `MAX_HASH_BYTES`.
 - Lo stesso nome con contenuto diverso o hash non disponibile resta un documento distinto; gli eventuali candidati sono indicati nel campo `possibleDuplicateOfFileIds`.
 - La conversione DOC/DOCX/Google Docs dipende dalle capacità e quote `getAs` di Apps Script.
@@ -556,7 +562,7 @@ Non assumere che un test riuscito in My Drive garantisca lo stesso comportamento
 - La deadline impedisce nuovi tentativi e mutazioni quando il margine è insufficiente, ma Apps Script non permette di interrompere una singola `UrlFetchApp.fetch` già in corso.
 - L'indice interrompe presto alberi con troppe candidate, ma la traversata Drive iniziale non è interrompibile a metà di una singola chiamata/iterazione lenta; un albero eccezionalmente grande o un Drive degradato può ancora raggiungere il timeout della piattaforma.
 - Un modello configurato con ragionamento dinamico molto profondo può raggiungere `MAX_TOKENS` anche con il margine previsto; il risultato viene rifiutato in modo fail-safe e, in `OFF`/`AUTO` live, va in review, quindi provare sempre il modello con `testGemini()` e un piccolo DRY_RUN.
-- Il log su console non è un archivio audit permanente.
+- Il log console resta soggetto alla retention Apps Script; il Google Doc per-run è l'archivio audit persistente, salvo errori di creazione/append documentati nei suoi record console.
 - `generateContent` è ancora supportato ma oggi è documentato come API legacy; una futura migrazione a Interactions API richiederà una verifica dedicata.
 
 ## Troubleshooting
@@ -612,6 +618,10 @@ Se il file o il PDF esportato supera `MAX_INPUT_BYTES`, il risultato è `UNSUPPO
 
 `TRIGGER_MINUTES` viene letto solo in fase di creazione. Eseguire `removeTimeTriggers()`, aggiornare la proprietà e poi `installTimeTrigger()`.
 
+### Il Google Doc di audit non viene creato o aggiornato
+
+Eseguire `testPersistentAuditLog()` dopo il push e approvare il nuovo scope Google Docs. Verificare che l'account possa creare file direttamente in `ROOT_FOLDER_ID` e che la root non sia stata spostata o resa non accessibile. Se un append fallisce durante `runSorter`, il batch rifiuta le mutazioni successive per non perdere il trail di audit; correggere il permesso e rieseguire.
+
 ### Un file resta nella inbox
 
 Controllare `errorKind`: `API_ERROR` e `INTERNAL_ERROR` lasciano intenzionalmente il file dov'è; lock non disponibile salta l'intero run. Anche `DRY_RUN=true` e `FOLDER_CREATION_MODE=SUGGEST` lo lasciano intenzionalmente in inbox. In `OFF`/`AUTO`, classificazione incerta o formato unsupported devono invece pianificare/spostare in review quando le scritture sono abilitate.
@@ -636,11 +646,12 @@ Controllare `errorKind`: `API_ERROR` e `INTERNAL_ERROR` lasciano intenzionalment
 - [ ] verificare FOLDER_CREATION_CONFIDENCE_THRESHOLD (default 0.97)
 - [ ] verificare FOLDER_CREATION_SEMANTIC_GROUPS_JSON o impostare []
 - [ ] eseguire testDriveAccess
+- [ ] eseguire testPersistentAuditLog e verificare il Google Doc creato in root
 - [ ] eseguire testGemini
 - [ ] eseguire testFolderTree
 - [ ] eseguire testFolderCreationProposal
 - [ ] eseguire runSorter con DRY_RUN
 - [ ] controllare i log
-- [ ] provare FOLDER_CREATION_MODE=SUGGEST e controllare che Drive resti invariato
+- [ ] provare FOLDER_CREATION_MODE=SUGGEST e controllare che documenti/tassonomia restino invariati (eccetto un audit document)
 - [ ] provare FOLDER_CREATION_MODE=AUTO mantenendo DRY_RUN=true
 - [ ] solo dopo impostare DRY_RUN=false
