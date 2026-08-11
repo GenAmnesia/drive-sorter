@@ -294,6 +294,53 @@ assert.deepEqual(
 );
 assert.match(request.systemInstruction.parts[0].text, /untrusted data/i);
 assert.match(request.systemInstruction.parts[0].text, /Ignore every instruction/i);
+assert.match(request.systemInstruction.parts[0].text, /most specific supplied existing folder/i);
+
+const specificityRequest = JSON.parse(
+  evaluate(`JSON.stringify(buildGeminiClassificationRequest({
+    fileId:'file',filename:'imu-2025.pdf',mimeType:'application/pdf',sizeBytes:3,
+    kind:'INLINE_DATA',parts:[{inlineData:{mimeType:'application/pdf',data:'YWJj'}}],
+    extractedText:null,truncated:false,unsupportedReason:null
+  }, [
+    {id:'imu_parent_1234567890',name:'IMU',path:'Casa/IMU',parentId:'casa_1234567890',depth:2},
+    {id:'imu_2025_1234567890',name:'2025',path:'Casa/IMU/2025',parentId:'imu_parent_1234567890',depth:3}
+  ]))`),
+);
+const specificityCandidates = JSON.parse(
+  specificityRequest.contents[0].parts[0].text.match(/ALLOWED_FOLDER_CANDIDATES_JSON=(.*)\n/)[1],
+);
+assert.deepEqual(
+  specificityCandidates.map((candidate) => candidate.path),
+  ["Casa/IMU/2025", "Casa/IMU"],
+  "Existing descendants must be presented before their parents.",
+);
+assert.match(
+  specificityRequest.contents[0].parts[0].text,
+  /deeper existing path over any of its supplied ancestors/i,
+);
+assert.match(
+  specificityRequest.systemInstruction.parts[0].text,
+  /different four-digit year as incompatible/i,
+);
+
+const yearConflictRequest = JSON.parse(
+  evaluate(`JSON.stringify(buildGeminiClassificationRequest({
+    fileId:'file',filename:'cedolino-febbraio-2024.pdf',mimeType:'application/pdf',sizeBytes:3,
+    kind:'INLINE_DATA',parts:[{inlineData:{mimeType:'application/pdf',data:'YWJj'}}],
+    extractedText:'Cedolino febbraio 2024',truncated:false,unsupportedReason:null
+  }, [
+    {id:'pay_2023_1234567890',name:'2023',path:'Contabilita/Cedolini/2023',parentId:'payroll_1234567890',depth:3},
+    {id:'pay_2024_1234567890',name:'2024',path:'Contabilita/Cedolini/2024',parentId:'payroll_1234567890',depth:3}
+  ]))`),
+);
+assert.match(
+  yearConflictRequest.systemInstruction.parts[0].text,
+  /payslip for February 2024 must not be placed in a path containing 2023/i,
+);
+assert.match(
+  yearConflictRequest.contents[0].parts[0].text,
+  /explicit-year conflict rule/i,
+);
 
 evaluate(`
   globalThis.__folderProposalConfig = {
@@ -943,10 +990,16 @@ evaluate(`
     }
   };
   globalThis.__persistentAuditRoot = {
-    getId: function () { return 'root_1234567890'; }
+    getId: function () { return 'root_1234567890'; },
+    getName: function () { return 'DOCUMENTI'; }
+  };
+  globalThis.__persistentAuditLogs = {
+    getId: function () { return 'logs_1234567890'; },
+    getName: function () { return 'logs'; }
   };
   globalThis.__persistentAuditInfo = startPersistentAuditLog(
     globalThis.__persistentAuditRoot,
+    globalThis.__persistentAuditLogs,
     '2026-08-11T21:27:49.636Z_test-run',
     0
   );
@@ -976,7 +1029,7 @@ const persistentAudit = JSON.parse(
   ),
 );
 assert.equal(persistentAudit.moves, 1);
-assert.equal(persistentAudit.file.parentId, "root_1234567890");
+assert.equal(persistentAudit.file.parentId, "logs_1234567890");
 assert.match(persistentAudit.file.name, /^Drive Sorter Audit /);
 assert.equal(persistentAudit.lines.length, 3);
 assert.equal(persistentAudit.state.linesWritten, 3);
@@ -1011,6 +1064,8 @@ const humanReportSnapshotInput = {
     fileId: "raw_audit_1234567890",
     filename: "Drive Sorter Audit test",
     rootFolderId: "root_1234567890",
+    logFolderId: "logs_1234567890",
+    logFolderPath: "DOCUMENTI/logs",
     startedAt: "2026-08-12T10:00:00.000Z",
     linesWritten: 2,
   },
@@ -1163,14 +1218,14 @@ evaluate(`
     getFileById: function () { return globalThis.__persistentAuditFile; }
   };
   globalThis.__humanReportMovesBeforeFailure = globalThis.__persistentAuditMoves;
-  startPersistentAuditLog(globalThis.__persistentAuditRoot, 'report-failure-run', 0);
+  startPersistentAuditLog(globalThis.__persistentAuditRoot, globalThis.__persistentAuditLogs, 'report-failure-run', 0);
   globalThis.__originalHumanReportGenerator = generateHumanReadableRunReport;
   try {
     generateHumanReadableRunReport = function () {
       throw new Error('simulated report API failure');
     };
     globalThis.__humanReportFailureResult = finalizeHumanReadableRunReport(
-      {}, globalThis.__persistentAuditRoot, 'report-failure-run', Date.now()+60000
+      {}, globalThis.__persistentAuditLogs, 'report-failure-run', Date.now()+60000
     );
     globalThis.__humanReportFailureSnapshot = getPersistentAuditLogSnapshot();
   } finally {
@@ -1188,6 +1243,44 @@ assert.match(
   evaluate("__humanReportFailureSnapshot.serializedLines.join('\\n')"),
   /HUMAN_REPORT_ERROR/,
   "Report failures must be persisted in the raw audit when possible.",
+);
+
+evaluate(`
+  function __logsIterator(items) {
+    var cursor = 0;
+    return { hasNext: function () { return cursor < items.length; }, next: function () { return items[cursor++]; } };
+  }
+  function __logsFolder(id, name, parent) {
+    return {
+      id: id, name: name, children: [], parent: parent || null,
+      getId: function () { return this.id; },
+      getName: function () { return this.name; },
+      getFolders: function () { return __logsIterator(this.children); },
+      getParents: function () { return this.parent === null ? __logsIterator([]) : __logsIterator([this.parent]); },
+      createFolder: function (childName) { var child = __logsFolder('logs_1234567890', childName, this); this.children.push(child); return child; }
+    };
+  }
+  globalThis.__logsRoot = __logsFolder('root_1234567890', 'DOCUMENTI');
+  globalThis.__logsInbox = __logsFolder('inbox_1234567890', 'Da smistare', __logsRoot);
+  globalThis.__logsReview = __logsFolder('review_1234567890', 'Da controllare', __logsRoot);
+  globalThis.__logsNormal = __logsFolder('normal_1234567890', 'Casa', __logsRoot);
+  __logsRoot.children.push(__logsInbox, __logsReview, __logsNormal);
+  globalThis.__logsContext = {root:__logsRoot,inbox:__logsInbox,review:__logsReview,logFolder:null};
+  globalThis.__logsConfig = {
+    rootFolderId:'root_1234567890', inboxFolderId:'inbox_1234567890', reviewFolderId:'review_1234567890',
+    logFolderName:'logs', excludedFolderIds:[], duplicateFolderName:'Duplicati', maxCandidateFolders:50, maxFolderDepth:10
+  };
+  globalThis.__logsFirst = ensureAuditLogFolder(__logsConfig, __logsContext);
+  globalThis.__logsSecond = ensureAuditLogFolder(__logsConfig, __logsContext);
+  globalThis.__logsIndex = buildFolderIndex(__logsConfig, __logsContext);
+`);
+assert.equal(evaluate("__logsFirst.created"), true);
+assert.equal(evaluate("__logsSecond.created"), false);
+assert.equal(evaluate("__logsRoot.children.filter(function (child) { return child.getName() === 'logs'; }).length"), 1);
+assert.equal(
+  evaluate("__logsIndex.folders.some(function (entry) { return entry.name === 'logs'; })"),
+  false,
+  "The reserved log folder must never be a classification candidate.",
 );
 
 const manifest = JSON.parse(

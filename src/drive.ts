@@ -162,6 +162,31 @@ function createValidatedChildFolder(
   return parent.createFolder(safeName);
 }
 
+/** Resolve the reserved direct child used only for per-run audit documents. */
+function ensureAuditLogFolder(
+  config: AppConfig,
+  context: DriveFolderContext,
+): { folder: GoogleAppsScript.Drive.Folder; created: boolean } {
+  const existing = context.logFolder || findUniqueDirectChildFolderByName(
+    context.root,
+    config.logFolderName,
+  );
+  if (existing !== null) {
+    if (!folderIsDirectChildOfFolder(existing, context.root.getId())) {
+      throw new Error("The configured log folder is no longer a direct child of ROOT_FOLDER_ID.");
+    }
+    context.logFolder = existing;
+    return { folder: existing, created: false };
+  }
+  const created = createValidatedChildFolder(context.root, config.logFolderName);
+  const verified = findUniqueDirectChildFolderByName(context.root, config.logFolderName);
+  if (verified === null || verified.getId() !== created.getId()) {
+    throw new Error("The new log folder could not be uniquely verified under ROOT_FOLDER_ID.");
+  }
+  context.logFolder = verified;
+  return { folder: verified, created: true };
+}
+
 /**
  * Build a deterministic-but-unique enough name for the append-only audit
  * document. It deliberately contains no user document name or secret.
@@ -187,6 +212,7 @@ function buildPersistentAuditLogFilename(
  */
 function createPersistentAuditDocument(
   root: GoogleAppsScript.Drive.Folder,
+  logFolder: GoogleAppsScript.Drive.Folder,
   runId: string,
   startedAtEpochMs: number,
 ): PersistentAuditLogInfo {
@@ -196,10 +222,10 @@ function createPersistentAuditDocument(
   document.saveAndClose();
 
   const auditFile = DriveApp.getFileById(documentId);
-  auditFile.moveTo(root);
-  if (!fileIsDirectChildOfFolder(auditFile, root.getId())) {
+  auditFile.moveTo(logFolder);
+  if (!fileIsDirectChildOfFolder(auditFile, logFolder.getId())) {
     throw new Error(
-      "The newly created audit document could not be verified in ROOT_FOLDER_ID.",
+      "The newly created audit document could not be verified in the reserved log folder.",
     );
   }
 
@@ -209,6 +235,8 @@ function createPersistentAuditDocument(
     fileId: auditFile.getId(),
     filename: auditFile.getName(),
     rootFolderId: root.getId(),
+    logFolderId: logFolder.getId(),
+    logFolderPath: `${root.getName()}/${logFolder.getName()}`,
     startedAt: isoTimestamp(new Date(startedAtEpochMs)),
     linesWritten: 0,
   };
@@ -247,7 +275,7 @@ function buildHumanReadableReportFilename(
  * existing report, audit, or classified file.
  */
 function createHumanReadableReportDocument(
-  root: GoogleAppsScript.Drive.Folder,
+  logFolder: GoogleAppsScript.Drive.Folder,
   source: HumanReportSource,
   report: HumanReadableRunReport,
 ): HumanReadableReportDocumentInfo {
@@ -263,10 +291,10 @@ function createHumanReadableReportDocument(
   document.saveAndClose();
 
   const reportFile = DriveApp.getFileById(documentId);
-  reportFile.moveTo(root);
-  if (!fileIsDirectChildOfFolder(reportFile, root.getId())) {
+  reportFile.moveTo(logFolder);
+  if (!fileIsDirectChildOfFolder(reportFile, logFolder.getId())) {
     throw new Error(
-      "The newly created human-readable report could not be verified in ROOT_FOLDER_ID.",
+      "The newly created human-readable report could not be verified in the reserved log folder.",
     );
   }
 
@@ -274,7 +302,9 @@ function createHumanReadableReportDocument(
     documentId,
     fileId: reportFile.getId(),
     filename: reportFile.getName(),
-    rootFolderId: root.getId(),
+    rootFolderId: source.audit.rootFolderId,
+    logFolderId: logFolder.getId(),
+    logFolderPath: source.audit.logFolderPath,
     rawAuditDocumentId: source.audit.documentId,
   };
 }
@@ -427,6 +457,8 @@ function maybeCreateFallbackFolder(
     context.inbox.getName().trim().toLowerCase(),
     context.review.getName().trim().toLowerCase(),
     config.duplicateFolderName.trim().toLowerCase(),
+    "logs",
+    config.logFolderName.trim().toLowerCase(),
   ]);
   if (reservedNames.has(requestedName.toLowerCase())) {
     throw new Error("FALLBACK_FOLDER_NAME coincide con una cartella riservata.");
@@ -576,6 +608,7 @@ function assertDestinationStillAllowed(
   const reservedIds = [
     config.inboxFolderId,
     config.reviewFolderId,
+    ...(context.logFolder === null ? [] : [context.logFolder.getId()]),
     ...config.excludedFolderIds,
   ];
   if (
@@ -592,6 +625,8 @@ function assertDestinationStillAllowed(
     context.inbox.getName(),
     context.review.getName(),
     config.duplicateFolderName,
+    "logs",
+    config.logFolderName,
   ];
   if (
     folderOrAncestorHasAnyReservedName(

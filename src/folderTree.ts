@@ -2,6 +2,7 @@ interface DriveFolderContext {
   root: GoogleAppsScript.Drive.Folder;
   inbox: GoogleAppsScript.Drive.Folder;
   review: GoogleAppsScript.Drive.Folder;
+  logFolder: GoogleAppsScript.Drive.Folder | null;
 }
 
 function getFolderOrThrow(
@@ -73,10 +74,11 @@ function validateDriveConfiguration(config: AppConfig): DriveFolderContext {
   ]);
   if (
     operationalNames.has(config.duplicateFolderName.toLowerCase()) ||
-    operationalNames.has(config.fallbackFolderName.toLowerCase())
+    operationalNames.has(config.fallbackFolderName.toLowerCase()) ||
+    operationalNames.has(config.logFolderName.toLowerCase())
   ) {
     throw new Error(
-      "I nomi delle cartelle Duplicati/fallback non possono coincidere con inbox o review.",
+      "I nomi delle cartelle Duplicati/fallback/log non possono coincidere con inbox o review.",
     );
   }
 
@@ -87,7 +89,26 @@ function validateDriveConfiguration(config: AppConfig): DriveFolderContext {
     throw new Error("REVIEW_FOLDER_ID non si trova sotto ROOT_FOLDER_ID.");
   }
 
-  return { root, inbox, review };
+  return { root, inbox, review, logFolder: findUniqueDirectChildFolderByName(root, config.logFolderName) };
+}
+
+function findUniqueDirectChildFolderByName(
+  parent: GoogleAppsScript.Drive.Folder,
+  name: string,
+): GoogleAppsScript.Drive.Folder | null {
+  const expected = normalizeFolderNameForLookup(name);
+  const matches: GoogleAppsScript.Drive.Folder[] = [];
+  const children = parent.getFolders();
+  while (children.hasNext()) {
+    const child = children.next();
+    if (normalizeFolderNameForLookup(child.getName()) === expected) {
+      matches.push(child);
+    }
+  }
+  if (matches.length > 1) {
+    throw new Error("ROOT_FOLDER_ID contains multiple equivalent log folders; refusing ambiguous audit placement.");
+  }
+  return matches[0] || null;
 }
 
 function shouldExcludeFolder(
@@ -110,6 +131,7 @@ function buildFolderIndex(
     config.rootFolderId,
     config.inboxFolderId,
     config.reviewFolderId,
+    ...(folders.logFolder === null ? [] : [folders.logFolder.getId()]),
     ...config.excludedFolderIds,
   ]);
   const visitedIds = new Set<string>();
@@ -117,9 +139,12 @@ function buildFolderIndex(
     "da smistare",
     "da controllare",
     "duplicati",
+    "logs",
     folders.inbox.getName(),
     folders.review.getName(),
     config.duplicateFolderName,
+    config.logFolderName,
+    ...(folders.logFolder === null ? [] : [folders.logFolder.getName()]),
   ].map(normalizeFolderNameForLookup));
   const entries: FolderEntry[] = [];
   const byId: FolderLookup = Object.create(null) as FolderLookup;

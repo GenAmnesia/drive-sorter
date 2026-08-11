@@ -16,10 +16,11 @@ class PersistentAuditLogError extends Error {
 /**
  * Start the append-only audit document for one validated run. It is created
  * before normal batch logging so a later failure still leaves a durable start
- * marker in the root folder whenever creation succeeded.
+ * marker in the reserved root/logs folder whenever creation succeeded.
  */
 function startPersistentAuditLog(
   root: GoogleAppsScript.Drive.Folder,
+  logFolder: GoogleAppsScript.Drive.Folder,
   runId: string,
   startedAtEpochMs: number,
 ): PersistentAuditLogInfo {
@@ -31,6 +32,7 @@ function startPersistentAuditLog(
 
   activePersistentAuditLog = createPersistentAuditDocument(
     root,
+    logFolder,
     runId,
     startedAtEpochMs,
   );
@@ -45,6 +47,8 @@ function startPersistentAuditLog(
     auditDocumentId: activePersistentAuditLog.documentId,
     auditFilename: activePersistentAuditLog.filename,
     rootFolderId: activePersistentAuditLog.rootFolderId,
+    logFolderId: activePersistentAuditLog.logFolderId,
+    logFolderPath: activePersistentAuditLog.logFolderPath,
     dryRun: false,
     reason:
       "Persistent audit document initialized before document processing.",

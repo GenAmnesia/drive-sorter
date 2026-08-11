@@ -46,6 +46,7 @@ interface AppConfig {
   retryMaxDelayMs: number;
   triggerMinutes: number;
   excludedFolderIds: string[];
+  logFolderName: string;
   allowFolderCreation: boolean;
   fallbackFolderName: string;
   folderCreationMode: FolderCreationMode;
@@ -372,6 +373,8 @@ interface PersistentAuditLogInfo {
   fileId: string;
   filename: string;
   rootFolderId: string;
+  logFolderId: string;
+  logFolderPath: string;
   startedAt: string;
   linesWritten: number;
 }
@@ -454,5 +457,7 @@ interface HumanReadableReportDocumentInfo {
   fileId: string;
   filename: string;
   rootFolderId: string;
+  logFolderId: string;
+  logFolderPath: string;
   rawAuditDocumentId: string;
 }

@@ -463,7 +463,7 @@ function validateHumanReportText(
  */
 function finalizeHumanReadableRunReport(
   config: AppConfig,
-  root: GoogleAppsScript.Drive.Folder,
+  logFolder: GoogleAppsScript.Drive.Folder,
   runId: string,
   deadlineEpochMs: number,
 ): HumanReadableReportDocumentInfo | null {
@@ -510,7 +510,7 @@ function finalizeHumanReadableRunReport(
         "A new audit-only human-readable report document is about to be created in ROOT_FOLDER_ID.",
     });
     assertPersistentAuditLogHealthy();
-    const document = createHumanReadableReportDocument(root, source, report);
+    const document = createHumanReadableReportDocument(logFolder, source, report);
     logPersistentAuditEvent({
       timestamp: isoTimestamp(),
       event: "HUMAN_REPORT_CREATED",

@@ -41,7 +41,8 @@ function testPersistentAuditLog(): void {
   const context = validateDriveConfiguration(config);
   const startedAt = Date.now();
   const runId = createRunId();
-  const audit = startPersistentAuditLog(context.root, runId, startedAt);
+  const logFolder = ensureAuditLogFolder(config, context).folder;
+  const audit = startPersistentAuditLog(context.root, logFolder, runId, startedAt);
 
   try {
     logPersistentAuditEvent({
@@ -50,7 +51,7 @@ function testPersistentAuditLog(): void {
       runId,
       auditDocumentId: audit.documentId,
       auditFilename: audit.filename,
-      rootFolderId: context.root.getId(),
+      rootFolderId: context.root.getId(), logFolderId: logFolder.getId(),
       status: "ok",
       driveModified: "audit_document_only",
     });
@@ -70,7 +71,8 @@ function testHumanReadableReport(): void {
   const startedAt = Date.now();
   const deadlineEpochMs = startedAt + Math.min(config.maxRunMillis, 60_000);
   const runId = createRunId();
-  startPersistentAuditLog(context.root, runId, startedAt);
+  const logFolder = ensureAuditLogFolder(config, context).folder;
+  startPersistentAuditLog(context.root, logFolder, runId, startedAt);
 
   try {
     logOperation(
@@ -113,7 +115,7 @@ function testHumanReadableReport(): void {
     );
     const report = finalizeHumanReadableRunReport(
       config,
-      context.root,
+      logFolder,
       runId,
       deadlineEpochMs,
     );

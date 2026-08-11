@@ -159,12 +159,16 @@ DOCUMENTI/
 
 `ROOT_FOLDER_ID` identifica `DOCUMENTI`; inbox e review devono essere cartelle distinte e discendenti della root. L'indice candidato è ricorsivo e produce path relativi come `Casa/Tributi/IMU`.
 
+Quando sia un padre sia una sua sottocartella sono candidate, il prompt presenta prima i path più profondi e impone di scegliere la cartella **più specifica già esistente** se il contenuto la supporta. Per esempio, un avviso IMU 2025 va in `Casa/IMU/2025`, non in `Casa/IMU`, quando entrambe esistono. Il padre resta corretto soltanto se il documento non identifica con affidabilità una sottocartella fornita.
+
+Se il contenuto identifica chiaramente l’anno di competenza, periodo, imposta, copertura o paga, una candidata il cui path contiene un anno a quattro cifre diverso viene esclusa: un cedolino di febbraio 2024 non va in `…/2023`. Il modello deve distinguere l’anno rilevante da date incidentali (emissione, stampa, protocollo, firma, riferimenti storici); il solo filename resta un segnale secondario e non forza questa regola.
+
 Non vengono mai proposte a Gemini come destinazioni normali:
 
 - la root;
 - la inbox;
 - la cartella review;
-- qualsiasi cartella chiamata `Da smistare`, `Da controllare`, `Duplicati`, come il nome effettivo della inbox/review o come `DUPLICATE_FOLDER_NAME`, senza distinzione tra maiuscole e minuscole;
+- qualsiasi cartella chiamata `Da smistare`, `Da controllare`, `Duplicati`, `logs`, come il nome effettivo della inbox/review o come `DUPLICATE_FOLDER_NAME`/`LOG_FOLDER_NAME`, senza distinzione tra maiuscole e minuscole;
 - gli ID elencati in `EXCLUDED_FOLDER_IDS`;
 - tutti i discendenti di una cartella riservata o esclusa.
 
@@ -237,6 +241,7 @@ Tutte le proprietà sono stringhe nell'interfaccia Apps Script. Usare esattament
 | `MAX_FILES_PER_RUN` | `10` | Intero `1..100`. |
 | `MAX_FOLDER_DEPTH` | `10` | Intero `1..100`; i figli oltre il limite non sono candidati. |
 | `DUPLICATE_FOLDER_NAME` | `Duplicati` | Nome sicuro `1..200` caratteri, senza slash o controlli. |
+| `LOG_FOLDER_NAME` | `logs` | Sottocartella diretta della root, creata se assente, per audit e report per-run; non è candidata. |
 | `RENAME_FILES` | `false` | Abilita il solo suggerimento nome validato; l'estensione originale è sempre preservata. |
 | `MAX_INPUT_BYTES` | `10485760` | Massimo input preparato, `1..12582912` byte (12 MiB) per contenere l'espansione base64. |
 | `MAX_HASH_BYTES` | `10485760` | Massimo blob per SHA-256, `1..52428800` byte. |
@@ -263,6 +268,7 @@ Esempio descrittivo, senza valori reali:
 ROOT_FOLDER_ID=ID_DELLA_ROOT
 INBOX_FOLDER_ID=ID_DA_SMISTARE
 REVIEW_FOLDER_ID=ID_DA_CONTROLLARE
+LOG_FOLDER_NAME=logs
 GEMINI_API_KEY=CHIAVE_SALVATA_SOLO_NELLE_SCRIPT_PROPERTIES
 GEMINI_MODEL=gemini-3.5-flash-lite
 DRY_RUN=true
@@ -271,7 +277,7 @@ FOLDER_CREATION_CONFIDENCE_THRESHOLD=0.97
 FOLDER_CREATION_SEMANTIC_GROUPS_JSON=[]
 ```
 
-Gli ID root, inbox e review devono essere tutti diversi. `DUPLICATE_FOLDER_NAME` non può coincidere con i nomi riservati o con i nomi effettivi di inbox/review. `FALLBACK_FOLDER_NAME` non può essere `Da smistare`, `Da controllare` o `Duplicati`, non può coincidere con inbox/review né con `DUPLICATE_FOLDER_NAME`.
+Gli ID root, inbox e review devono essere tutti diversi. `DUPLICATE_FOLDER_NAME` non può coincidere con i nomi riservati o con i nomi effettivi di inbox/review. `FALLBACK_FOLDER_NAME` non può essere `Da smistare`, `Da controllare` o `Duplicati`, non può coincidere con inbox/review né con `DUPLICATE_FOLDER_NAME`. `LOG_FOLDER_NAME` usa `logs` per default e non può coincidere con inbox, review, duplicati o fallback.
 
 ## Formati documentali e limiti
 
@@ -400,7 +406,7 @@ Se esiste almeno una candidata ma nessuna è adatta, il fallback `Altro` non vie
 
 ## DRY_RUN e rollout consigliato
 
-Con `DRY_RUN=true`, documenti e cartelle di smistamento restano in sola lettura. Le sole eccezioni esplicite sono i due nuovi Google Doc per-run, creati direttamente in `ROOT_FOLDER_ID`: l'audit raw e il report leggibile derivato da esso.
+Con `DRY_RUN=true`, documenti e cartelle di smistamento restano in sola lettura. Le sole eccezioni esplicite sono la sottocartella riservata `ROOT_FOLDER_ID/logs` (creata se manca) e i due nuovi Google Doc per-run che contiene: audit raw e report leggibile.
 
 - nessun `moveTo`;
 - nessun `setName`;
@@ -434,7 +440,7 @@ Dopo `npm run push`, aprire l'editor con `npm run open`, selezionare una funzion
 | `testHashing()` | Self-test SHA-256 in memoria; nessun accesso Drive. |
 | `testFilenameCollision()` | Test puro di collisione/estensione; nessun accesso Drive. |
 | `testDriveAccess()` | Legge la inbox e logga nome, ID, MIME e size; nessuna modifica. |
-| `testPersistentAuditLog()` | Crea un solo Google Doc di audit nella root e scrive due record di smoke test; non legge, sposta o rinomina file della inbox. |
+| `testPersistentAuditLog()` | Crea `ROOT_FOLDER_ID/logs` se manca, poi un solo Google Doc di audit e due record di smoke test; non legge, sposta o rinomina file della inbox. |
 | `testHumanReadableReport()` | Crea audit e report da un record sintetico e fa una richiesta Gemini; non legge, sposta o rinomina file della inbox. |
 | `testFolderTree()` | Costruisce e stampa l'indice candidato; nessuna creazione. |
 | `testGemini()` | Richiesta minima Gemini; nessun accesso Drive. |
@@ -474,7 +480,7 @@ L'installazione è idempotente per l'utente corrente: se esiste già un trigger 
 
 ## Logging e audit
 
-Dopo lock, configurazione e root validi, ogni `runSorter()` crea un nuovo Google Doc con nome `Drive Sorter Audit …` direttamente in `ROOT_FOLDER_ID`. Non riusa né sovrascrive un audit precedente. La stessa riga JSON sanificata continua a essere inviata a `console.log` e viene anche aggiunta al documento, poi salvata e chiusa immediatamente, per:
+Dopo lock, configurazione e root validi, ogni `runSorter()` risolve la sottocartella diretta `ROOT_FOLDER_ID/logs` (o `LOG_FOLDER_NAME`), creandola se manca, e vi crea un nuovo Google Doc `Drive Sorter Audit …`. Non riusa né sovrascrive un audit precedente. La stessa riga JSON sanificata continua a essere inviata a `console.log` e viene anche aggiunta al documento, poi salvata e chiusa immediatamente, per:
 
 - inizio/fine/fallimento del batch (`event: "BATCH"`);
 - ogni file (`event: "FILE"`);
@@ -489,7 +495,7 @@ I record file includono timestamp, run ID, file ID, nome originale, MIME, size, 
 
 Il record batch conta richieste di proposta, proposte accettate/rifiutate, errori API della seconda richiesta, cartelle realmente create ed esiti parziali. Una proposta accettata in `SUGGEST` è soltanto un suggerimento validato, non una cartella creata.
 
-Aprire il nuovo report accanto all'audit nella root oppure **Apps Script → Esecuzioni** per consultare il run. Non è incluso un Google Sheet di audit. Chiavi con nomi sensibili e pattern comuni di API key/token vengono redatti; richieste e risposte Gemini complete non vengono loggate. Nomi file, folder path e ID sono invece dati operativi e possono essere sensibili: limitare l'accesso alla root, al progetto e ai log.
+Aprire il nuovo report accanto all'audit in `ROOT_FOLDER_ID/logs` oppure **Apps Script → Esecuzioni** per consultare il run. Non è incluso un Google Sheet di audit. Chiavi con nomi sensibili e pattern comuni di API key/token vengono redatti; richieste e risposte Gemini complete non vengono loggate. Nomi file, folder path e ID sono invece dati operativi e possono essere sensibili: limitare l'accesso alla root, al progetto e ai log.
 
 ## Free Tier, quote e retry
 
@@ -558,7 +564,7 @@ Non assumere che un test riuscito in My Drive garantisca lo stesso comportamento
 - Tra controllo collisione e mutazione un attore esterno può creare una gara sul filename; Drive consente nomi uguali, quindi non avviene sovrascrittura, ma può servire revisione manuale.
 - Uno spostamento e una rinomina sono due chiamate Drive: se la seconda fallisce dopo la prima, il file può risultare già spostato con il nome originale. Il log segnala l'errore; ispezionare Drive senza eliminare nulla.
 - Creazione e spostamento sono chiamate separate: se la nuova cartella viene creata ma una verifica o il move fallisce, la cartella può restare vuota. Il log la registra come esito parziale e il codice non la elimina.
-- Se la creazione del nuovo audit document riesce ma il suo trasferimento nella root fallisce, il documento può restare nel My Drive dell'account: il batch non processa file e non elimina automaticamente quel documento.
+- Se la creazione della cartella `logs` o il trasferimento del nuovo audit document in essa fallisce, il documento può restare nel My Drive dell'account: il batch non processa file e non elimina automaticamente quel documento.
 - Il rilevamento duplicati esatti non copre file Google Workspace nativi né file oltre `MAX_HASH_BYTES`.
 - Lo stesso nome con contenuto diverso o hash non disponibile resta un documento distinto; gli eventuali candidati sono indicati nel campo `possibleDuplicateOfFileIds`.
 - La conversione DOC/DOCX/Google Docs dipende dalle capacità e quote `getAs` di Apps Script.
@@ -627,7 +633,7 @@ Se il file o il PDF esportato supera `MAX_INPUT_BYTES`, il risultato è `UNSUPPO
 
 ### Il Google Doc di audit non viene creato o aggiornato
 
-Eseguire `testPersistentAuditLog()` dopo il push e approvare il nuovo scope Google Docs. Verificare che l'account possa creare file direttamente in `ROOT_FOLDER_ID` e che la root non sia stata spostata o resa non accessibile. Se un append fallisce durante `runSorter`, il batch rifiuta le mutazioni successive per non perdere il trail di audit; correggere il permesso e rieseguire.
+Eseguire `testPersistentAuditLog()` dopo il push e approvare il nuovo scope Google Docs. Verificare che l'account possa creare la sottocartella `logs` e i relativi file in `ROOT_FOLDER_ID` e che la root non sia stata spostata o resa non accessibile. Se un append fallisce durante `runSorter`, il batch rifiuta le mutazioni successive per non perdere il trail di audit; correggere il permesso e rieseguire.
 
 ### Il report leggibile non viene creato
 
@@ -657,8 +663,9 @@ Controllare `errorKind`: `API_ERROR` e `INTERNAL_ERROR` lasciano intenzionalment
 - [ ] verificare FOLDER_CREATION_CONFIDENCE_THRESHOLD (default 0.97)
 - [ ] verificare FOLDER_CREATION_SEMANTIC_GROUPS_JSON o impostare []
 - [ ] eseguire testDriveAccess
-- [ ] eseguire testPersistentAuditLog e verificare il Google Doc creato in root
-- [ ] eseguire testHumanReadableReport e verificare audit + report sintetici in root
+- [ ] verificare LOG_FOLDER_NAME o lasciare `logs`
+- [ ] eseguire testPersistentAuditLog e verificare il Google Doc creato in root/logs
+- [ ] eseguire testHumanReadableReport e verificare audit + report sintetici in root/logs
 - [ ] eseguire testGemini
 - [ ] eseguire testFolderTree
 - [ ] eseguire testFolderCreationProposal

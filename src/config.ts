@@ -14,6 +14,7 @@ const CONFIG_DEFAULTS = Object.freeze({
   retryBaseDelayMs: 1_000,
   retryMaxDelayMs: 30_000,
   triggerMinutes: 15,
+  logFolderName: "logs",
   allowFolderCreation: false,
   fallbackFolderName: "Altro",
   folderCreationMode: "AUTO" as FolderCreationMode,
@@ -76,6 +77,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   let retryMaxDelayMs: number = CONFIG_DEFAULTS.retryMaxDelayMs;
   let triggerMinutes: number = CONFIG_DEFAULTS.triggerMinutes;
   let excludedFolderIds: string[] = [];
+  let logFolderName: string = CONFIG_DEFAULTS.logFolderName;
   let allowFolderCreation: boolean = CONFIG_DEFAULTS.allowFolderCreation;
   let fallbackFolderName: string = CONFIG_DEFAULTS.fallbackFolderName;
   let folderCreationMode: FolderCreationMode =
@@ -336,6 +338,15 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   if (configuredFallbackFolderName !== null) {
     fallbackFolderName = configuredFallbackFolderName;
   }
+  const configuredLogFolderName = readOptionalNameProperty(
+    properties,
+    "LOG_FOLDER_NAME",
+    CONFIG_DEFAULTS.logFolderName,
+    problems,
+  );
+  if (configuredLogFolderName !== null) {
+    logFolderName = configuredLogFolderName;
+  }
 
   folderCreationSemanticGroups = readConfigValue(
     () =>
@@ -344,6 +355,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
         CONFIG_DEFAULTS.folderCreationSemanticGroups,
         duplicateFolderName,
         fallbackFolderName,
+        logFolderName,
       ),
     folderCreationSemanticGroups,
     problems,
@@ -432,6 +444,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   }
   const normalizedDuplicateName = duplicateFolderName.toLowerCase();
   const normalizedFallbackName = fallbackFolderName.toLowerCase();
+  const normalizedLogName = logFolderName.toLowerCase();
   const reservedOperationalNames = ["da smistare", "da controllare"];
   if (reservedOperationalNames.includes(normalizedDuplicateName)) {
     problems.push(
@@ -448,6 +461,13 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   if (normalizedDuplicateName === normalizedFallbackName) {
     problems.push(
       "DUPLICATE_FOLDER_NAME and FALLBACK_FOLDER_NAME must be different.",
+    );
+  }
+  if (
+    [...reservedOperationalNames, "duplicati", "logs", normalizedDuplicateName, normalizedFallbackName].includes(normalizedLogName)
+  ) {
+    problems.push(
+      "LOG_FOLDER_NAME cannot use an inbox/review/Duplicati/fallback reserved name.",
     );
   }
 
@@ -477,6 +497,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     retryMaxDelayMs,
     triggerMinutes,
     excludedFolderIds,
+    logFolderName,
     allowFolderCreation,
     fallbackFolderName,
     folderCreationMode,
@@ -524,6 +545,7 @@ function getSafeConfigSummary(config: AppConfig): Record<string, unknown> {
     retryMaxDelayMs: config.retryMaxDelayMs,
     triggerMinutes: config.triggerMinutes,
     excludedFolderCount: config.excludedFolderIds.length,
+    logFolderName: config.logFolderName,
     allowFolderCreation: config.allowFolderCreation,
     fallbackFolderName: config.fallbackFolderName,
     folderCreationMode: config.folderCreationMode,
@@ -580,6 +602,7 @@ function getSetupInstructions(): string {
     "- RETRY_MAX_DELAY_MS=30000",
     "- TRIGGER_MINUTES=15 (allowed: 1, 5, 10, 15, 30)",
     "- EXCLUDED_FOLDER_IDS=id1,id2 (optional CSV)",
+    "- LOG_FOLDER_NAME=logs (optional direct child of ROOT_FOLDER_ID for audit/report documents)",
     "",
     "Set these in Apps Script > Project Settings > Script Properties.",
     "Keep DRY_RUN=true until the manual tests and logs have been reviewed.",
@@ -666,6 +689,7 @@ function parseFolderCreationSemanticGroups(
   fallback: readonly (readonly string[])[],
   duplicateFolderName: string,
   fallbackFolderName: string,
+  logFolderName: string = CONFIG_DEFAULTS.logFolderName,
 ): string[][] {
   if (value === null || value === undefined || value.trim() === "") {
     return fallback.map((group) => group.slice());
@@ -689,6 +713,8 @@ function parseFolderCreationSemanticGroups(
     "duplicati",
     duplicateFolderName.normalize("NFKC").trim().toLowerCase(),
     fallbackFolderName.normalize("NFKC").trim().toLowerCase(),
+    "logs",
+    logFolderName.normalize("NFKC").trim().toLowerCase(),
   ]);
   const normalizedGroupKeys = new Set<string>();
   const groups: string[][] = [];

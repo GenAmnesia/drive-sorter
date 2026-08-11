@@ -200,3 +200,38 @@ into a separate Google Doc; Gemini never supplies Drive commands or markup.
 ### 10.1 Owner/manual verification
 
 - [ ] Push the report feature, run `runSorter` with `DRY_RUN=true`, and confirm that `Drive Sorter Report …` appears beside the raw audit in `ROOT_FOLDER_ID` with accurate file rows and no document/taxonomy changes.
+
+## 11. Reserved `ROOT_FOLDER_ID/logs` audit location (new active scope)
+
+- [x] Add a safe optional `LOG_FOLDER_NAME` configuration with the default `logs`, without requiring a new folder ID or secret.
+- [x] Resolve the direct child `ROOT_FOLDER_ID/logs` case-insensitively; create that single application-owned audit folder when it is missing, including in `DRY_RUN`/`SUGGEST`.
+- [x] Move new raw-audit and human-report documents only into the resolved logs folder and record its ID/path in persistent audit metadata.
+- [x] Exclude `logs`, its descendants, and any configured log-folder name from candidate destinations and folder-creation topology.
+- [x] Preserve read-only Drive smoke tests; make only audit/report tests and valid `runSorter` create the audit folder when necessary.
+- [x] Add static/mock verification for resolution, creation, candidate exclusion, and document placement; update README/setup/troubleshooting.
+- [x] Run typecheck, build, static verification, clasp status, and final diff/secret/destructive-operation review.
+
+### 11.1 Owner/manual verification
+
+- [ ] Push the change, run `testPersistentAuditLog()` or `runSorter` with `DRY_RUN=true`, and confirm that `ROOT_FOLDER_ID/logs` contains both per-run documents while no classified document or taxonomy folder changes.
+
+## 12. Specific existing-folder preference (new active scope)
+
+- [x] Present existing candidate folders to Gemini in a deterministic deepest-first hierarchy-aware order.
+- [x] Strengthen the classification prompt: choose the most specific existing descendant when document content supports it, but retain the parent when child-level evidence is genuinely absent or uncertain.
+- [x] Add a regression check for `Casa/IMU` versus `Casa/IMU/2025`, proving the request explicitly prioritizes the existing year folder without authorizing invented paths.
+- [x] Update README classification guidance and run typecheck, build, static verification, clasp status, and diff review.
+
+### 12.1 Owner/manual verification
+
+- [ ] Push the change and run a `DRY_RUN` with a document clearly identified as IMU 2025; confirm the raw audit proposes the existing `Casa/IMU/2025` folder rather than its parent.
+
+## 13. Explicit-year conflict avoidance (new active scope)
+
+- [x] Strengthen the classification prompt so a clearly identified document classification year conflicts with any different four-digit year in a candidate path.
+- [x] Preserve semantic judgement by distinguishing the document's relevant period/competence year from incidental issue, print, protocol, or historical dates.
+- [x] Add a request-shape regression for a February 2024 payslip and `.../2023` versus `.../2024` candidates; update README and verify the build/status/diff.
+
+### 13.1 Owner/manual verification
+
+- [ ] Push the change and run `DRY_RUN` with a document clearly identified as 2024 and both `/2023` and `/2024` candidates; confirm the raw audit does not propose the mismatched-year folder.

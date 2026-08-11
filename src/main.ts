@@ -33,8 +33,10 @@ function runSorter(): void {
 
     config = getAppConfig("FULL");
     context = validateDriveConfiguration(config);
+    const auditLogFolder = ensureAuditLogFolder(config, context);
     const persistentAuditLog = startPersistentAuditLog(
       context.root,
+      auditLogFolder.folder,
       runId,
       startedAt,
     );
@@ -56,6 +58,8 @@ function runSorter(): void {
           ...getSafeConfigSummary(config),
           persistentAuditDocumentId: persistentAuditLog.documentId,
           persistentAuditFilename: persistentAuditLog.filename,
+          logFolderId: auditLogFolder.folder.getId(),
+          logFolderCreated: auditLogFolder.created,
         }),
       }),
     );
@@ -147,7 +151,7 @@ function runSorter(): void {
     );
     finalizeHumanReadableRunReport(
       config,
-      context.root,
+      auditLogFolder.folder,
       runId,
       deadlineEpochMs,
     );
@@ -170,10 +174,10 @@ function runSorter(): void {
         message: getErrorMessage(error),
       }),
     );
-    if (config !== null && context !== null) {
+    if (config !== null && context !== null && context.logFolder !== null) {
       finalizeHumanReadableRunReport(
         config,
-        context.root,
+        context.logFolder,
         runId,
         startedAt + config.maxRunMillis,
       );
