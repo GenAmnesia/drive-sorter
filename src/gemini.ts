@@ -555,16 +555,14 @@ function sleepBeforeGeminiRetry(
     );
   }
   if (delay > 0) {
-    console.warn(
-      safeJsonStringify({
-        timestamp: isoTimestamp(),
-        event: "GEMINI_RETRY",
-        failedAttempt: attempt + 1,
-        nextAttempt: attempt + 2,
-        httpStatus,
-        delayMs: delay,
-      }),
-    );
+    logPersistentAuditEvent({
+      timestamp: isoTimestamp(),
+      event: "GEMINI_RETRY",
+      failedAttempt: attempt + 1,
+      nextAttempt: attempt + 2,
+      httpStatus,
+      delayMs: delay,
+    });
     Utilities.sleep(delay);
   }
 }

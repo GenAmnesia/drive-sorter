@@ -170,50 +170,54 @@ anything.
 - [x] Initialize the audit document before the batch `STARTED` record and append every sanitized batch/file record immediately with `saveAndClose()`.
 - [x] Write an action-intent audit record before each live document mutation so an interrupted run remains traceable.
 - [x] Fail closed before further document/folder mutations when the persistent audit document cannot be updated; retain console diagnostics without logging secrets.
-- [x] Treat audit-document creation/update as the initial explicit Drive-write exception in `DRY_RUN` and `SUGGEST`; task 10 adds a separate report document while keeping all classified documents and taxonomy folders unchanged.
+- [x] Treat audit-document creation/update as the only explicit Drive-write exception in `DRY_RUN` and `SUGGEST`, while keeping all classified documents and taxonomy folders unchanged.
 - [x] Add the minimum Google Docs OAuth scope, static/mock verification, and a clearly labeled manual audit-log smoke test.
 - [x] Update README safety, scope, rollout, and troubleshooting documentation for the audit exception and required reauthorization.
 - [x] Run typecheck, build, static verification, clasp status, and full diff/secret/destructive-operation review.
 
 ### 9.1 Owner/manual verification
 
-- [ ] Push the audit-log change, authorize the additional Google Docs scope, run `runSorter` with `DRY_RUN=true`, and confirm a new `Drive Sorter Audit` document appears directly in `ROOT_FOLDER_ID` with progressive JSON records.
+- [ ] Push the audit-log change, authorize the additional Google Docs scope, run `runSorter` with `DRY_RUN=true`, and confirm a new `Drive Sorter Audit` document appears directly in `ROOT_FOLDER_ID` with the configured console logger output.
 
-## 10. Gemini-generated human-readable run report (new active scope)
+## 10. Configurable console and audit logger (new active scope)
 
-The raw audit document remains authoritative. At the end of each valid run,
-Gemini receives only its bounded, already-sanitized JSON lines and returns a
-strict structured summary. Application code validates and renders that summary
-into a separate Google Doc; Gemini never supplies Drive commands or markup.
+The audit document must mirror the logger output emitted to the Apps Script
+console. There is exactly one audit document per valid run and no Gemini
+request or companion document is used to create a human-readable report.
 
-- [x] Define bounded report input, output, file-row, validation, and document metadata contracts without including document content or API keys.
-- [x] Retain the sanitized JSON lines written to the active audit document in memory, with a deterministic input-size limit and explicit truncation marker.
-- [x] Add a strict Gemini report prompt and JSON schema that treats every raw-log field as untrusted data, ignores embedded instructions, and forbids Drive actions, HTML, and invented files.
-- [x] Parse and runtime-validate the generated summary, including exact membership of every model file ID; derive and display each action, destination, and resulting filename exclusively from the raw audit data.
-- [x] Render a separate readable Google Doc with title, run status/counts, table of file outcomes, warnings, recommended next steps, and reference to the authoritative raw audit ID.
-- [x] Generate the companion report only after document processing has ended; failures in report generation/rendering are logged in the raw audit and never change the sorting result.
-- [x] Keep the human-report document as an explicit audit-only write permitted in `DRY_RUN` and `SUGGEST`, with no overwrite/delete behavior.
-- [x] Add static/mock tests for prompt injection isolation, raw-log bounds, response validation, safe rendering, and report-generation failure handling.
-- [x] Update README, setup/authorization notes, log documentation, manual test functions, and troubleshooting.
+- [x] Add `LOG_LEVEL=JSON|PRETTY|FULL`, defaulting to `JSON`, with case-insensitive parsing and clear validation errors.
+- [x] Keep `JSON` byte-for-byte compatible at record level: one sanitized JSON record per emitted logger event.
+- [x] Add `PRETTY` English-only ASCII presentation for batch, lifecycle, action-intent, and file-operation messages.
+- [x] Make PRETTY file operations show a readable hierarchy with file name, action, destination, Gemini type/reason/confidence, and conditional details for dry-run state, duration, duplicates, errors, and folder creation.
+- [x] Add dedicated English start and terminal batch banners; terminal banners include all summary counters and elapsed time.
+- [x] Make `FULL` emit the PRETTY message followed by the corresponding JSON record for every logger event.
+- [x] Persist every logger message in the same order it is emitted to the console, so the one Drive audit document contains the exact logger console output for that run.
+- [x] Route Gemini retry diagnostics through the shared logger so they follow the selected level and are persisted while an audit is active.
+- [x] Remove all Gemini human-report contracts, prompt/schema/request, response validation, rendering, companion document creation, tests, and documentation.
+- [x] Add static coverage for level parsing, JSON/PRETTY/FULL output selection, English PRETTY labels, file hierarchy, and audit persistence.
+- [x] Add a manual `testPrettyLogger()` smoke test that creates one synthetic audit without calling Gemini or touching inbox files.
+- [x] Update README, setup instructions, privacy notes, troubleshooting, and rollout checklist for the single-audit logger model.
 - [x] Run typecheck, build, static verification, clasp status, and full diff/secret/destructive-operation review.
 
 ### 10.1 Owner/manual verification
 
-- [ ] Push the report feature, run `runSorter` with `DRY_RUN=true`, and confirm that `Drive Sorter Report …` appears beside the raw audit in `ROOT_FOLDER_ID` with accurate file rows and no document/taxonomy changes.
+- [ ] Push the logger upgrade, set `LOG_LEVEL=PRETTY` with `DRY_RUN=true`, and confirm that `ROOT_FOLDER_ID/logs` contains one audit whose text matches the console output, including English start/end banners and the final summary.
+- [ ] Repeat with `LOG_LEVEL=JSON` and confirm one JSON record per logger event with no PRETTY text.
+- [ ] Repeat with `LOG_LEVEL=FULL` and confirm every PRETTY block is immediately followed by its JSON record in both console and audit document.
 
 ## 11. Reserved `ROOT_FOLDER_ID/logs` audit location (new active scope)
 
 - [x] Add a safe optional `LOG_FOLDER_NAME` configuration with the default `logs`, without requiring a new folder ID or secret.
 - [x] Resolve the direct child `ROOT_FOLDER_ID/logs` case-insensitively; create that single application-owned audit folder when it is missing, including in `DRY_RUN`/`SUGGEST`.
-- [x] Move new raw-audit and human-report documents only into the resolved logs folder and record its ID/path in persistent audit metadata.
+- [x] Move the new audit document only into the resolved logs folder and record its ID/path in persistent audit metadata.
 - [x] Exclude `logs`, its descendants, and any configured log-folder name from candidate destinations and folder-creation topology.
-- [x] Preserve read-only Drive smoke tests; make only audit/report tests and valid `runSorter` create the audit folder when necessary.
+- [x] Preserve read-only Drive smoke tests; make only audit/logger tests and valid `runSorter` create the audit folder when necessary.
 - [x] Add static/mock verification for resolution, creation, candidate exclusion, and document placement; update README/setup/troubleshooting.
 - [x] Run typecheck, build, static verification, clasp status, and final diff/secret/destructive-operation review.
 
 ### 11.1 Owner/manual verification
 
-- [ ] Push the change, run `testPersistentAuditLog()` or `runSorter` with `DRY_RUN=true`, and confirm that `ROOT_FOLDER_ID/logs` contains both per-run documents while no classified document or taxonomy folder changes.
+- [ ] Push the change, run `testPersistentAuditLog()` or `runSorter` with `DRY_RUN=true`, and confirm that `ROOT_FOLDER_ID/logs` contains one per-run audit while no classified document or taxonomy folder changes.
 
 ## 12. Specific existing-folder preference (new active scope)
 

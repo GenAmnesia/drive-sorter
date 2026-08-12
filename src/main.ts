@@ -11,6 +11,7 @@ function runSorter(): void {
   try {
     lockAcquired = lock.tryLock(1_000);
     if (!lockAcquired) {
+      setLogLevel(readLogLevelForDiagnostic());
       logBatch(
         createBatchLogRecord({
           runId,
@@ -31,7 +32,9 @@ function runSorter(): void {
       return;
     }
 
+    setLogLevel(readLogLevelForDiagnostic());
     config = getAppConfig("FULL");
+    setLogLevel(config.logLevel);
     context = validateDriveConfiguration(config);
     const auditLogFolder = ensureAuditLogFolder(config, context);
     const persistentAuditLog = startPersistentAuditLog(
@@ -39,6 +42,7 @@ function runSorter(): void {
       auditLogFolder.folder,
       runId,
       startedAt,
+      config.logLevel,
     );
     logBatch(
       createBatchLogRecord({
@@ -149,12 +153,6 @@ function runSorter(): void {
         ].join("; "),
       }),
     );
-    finalizeHumanReadableRunReport(
-      config,
-      auditLogFolder.folder,
-      runId,
-      deadlineEpochMs,
-    );
   } catch (error: unknown) {
     totals.errors += 1;
     logBatchFailureSafely(
@@ -174,14 +172,6 @@ function runSorter(): void {
         message: getErrorMessage(error),
       }),
     );
-    if (config !== null && context !== null && context.logFolder !== null) {
-      finalizeHumanReadableRunReport(
-        config,
-        context.logFolder,
-        runId,
-        startedAt + config.maxRunMillis,
-      );
-    }
   } finally {
     finishPersistentAuditLog();
     if (lockAcquired) {
@@ -325,6 +315,15 @@ function readDryRunForDiagnostic(): boolean {
     return parseBoolean(value, true, "DRY_RUN");
   } catch (_error) {
     return true;
+  }
+}
+
+function readLogLevelForDiagnostic(): LogLevel {
+  try {
+    const value = PropertiesService.getScriptProperties().getProperty("LOG_LEVEL");
+    return parseLogLevel(value, "JSON");
+  } catch (_error) {
+    return "JSON";
   }
 }
 

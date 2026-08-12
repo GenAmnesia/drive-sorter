@@ -15,6 +15,7 @@ const CONFIG_DEFAULTS = Object.freeze({
   retryMaxDelayMs: 30_000,
   triggerMinutes: 15,
   logFolderName: "logs",
+  logLevel: "PRETTY" as LogLevel,
   allowFolderCreation: false,
   fallbackFolderName: "Altro",
   folderCreationMode: "AUTO" as FolderCreationMode,
@@ -78,6 +79,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   let triggerMinutes: number = CONFIG_DEFAULTS.triggerMinutes;
   let excludedFolderIds: string[] = [];
   let logFolderName: string = CONFIG_DEFAULTS.logFolderName;
+  let logLevel: LogLevel = CONFIG_DEFAULTS.logLevel;
   let allowFolderCreation: boolean = CONFIG_DEFAULTS.allowFolderCreation;
   let fallbackFolderName: string = CONFIG_DEFAULTS.fallbackFolderName;
   let folderCreationMode: FolderCreationMode =
@@ -241,6 +243,11 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     triggerMinutes,
     problems,
   );
+  logLevel = readConfigValue(
+    () => parseLogLevel(properties.LOG_LEVEL, CONFIG_DEFAULTS.logLevel),
+    logLevel,
+    problems,
+  );
   renameFiles = readConfigValue(
     () =>
       parseBoolean(
@@ -263,61 +270,61 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
   );
   if (scope === "FULL") {
     folderCreationMode = readConfigValue(
-    () =>
-      parseFolderCreationMode(
-        properties.FOLDER_CREATION_MODE,
-        CONFIG_DEFAULTS.folderCreationMode,
-      ),
-    folderCreationMode,
-    problems,
-  );
+      () =>
+        parseFolderCreationMode(
+          properties.FOLDER_CREATION_MODE,
+          CONFIG_DEFAULTS.folderCreationMode,
+        ),
+      folderCreationMode,
+      problems,
+    );
     folderCreationConfidenceThreshold = readConfigValue(
-    () =>
-      parseFloatNumber(
-        properties.FOLDER_CREATION_CONFIDENCE_THRESHOLD,
-        CONFIG_DEFAULTS.folderCreationConfidenceThreshold,
-        "FOLDER_CREATION_CONFIDENCE_THRESHOLD",
-        0,
-        1,
-      ),
-    folderCreationConfidenceThreshold,
-    problems,
-  );
+      () =>
+        parseFloatNumber(
+          properties.FOLDER_CREATION_CONFIDENCE_THRESHOLD,
+          CONFIG_DEFAULTS.folderCreationConfidenceThreshold,
+          "FOLDER_CREATION_CONFIDENCE_THRESHOLD",
+          0,
+          1,
+        ),
+      folderCreationConfidenceThreshold,
+      problems,
+    );
     folderCreationMaxFinalDepth = readConfigValue(
-    () =>
-      parseInteger(
-        properties.FOLDER_CREATION_MAX_FINAL_DEPTH,
-        maxFolderDepth,
-        "FOLDER_CREATION_MAX_FINAL_DEPTH",
-        1,
-        100,
-      ),
-    maxFolderDepth,
-    problems,
-  );
+      () =>
+        parseInteger(
+          properties.FOLDER_CREATION_MAX_FINAL_DEPTH,
+          maxFolderDepth,
+          "FOLDER_CREATION_MAX_FINAL_DEPTH",
+          1,
+          100,
+        ),
+      maxFolderDepth,
+      problems,
+    );
     folderCreationMaxNewSegments = readConfigValue(
-    () =>
-      parseInteger(
-        properties.FOLDER_CREATION_MAX_NEW_SEGMENTS,
-        CONFIG_DEFAULTS.folderCreationMaxNewSegments,
-        "FOLDER_CREATION_MAX_NEW_SEGMENTS",
-        1,
-        10,
-      ),
-    folderCreationMaxNewSegments,
-    problems,
-  );
+      () =>
+        parseInteger(
+          properties.FOLDER_CREATION_MAX_NEW_SEGMENTS,
+          CONFIG_DEFAULTS.folderCreationMaxNewSegments,
+          "FOLDER_CREATION_MAX_NEW_SEGMENTS",
+          1,
+          10,
+        ),
+      folderCreationMaxNewSegments,
+      problems,
+    );
     folderCreationMinSiblingEvidence = readConfigValue(
-    () =>
-      parseInteger(
-        properties.FOLDER_CREATION_MIN_SIBLING_EVIDENCE,
-        CONFIG_DEFAULTS.folderCreationMinSiblingEvidence,
-        "FOLDER_CREATION_MIN_SIBLING_EVIDENCE",
-        2,
-        100,
-      ),
-    folderCreationMinSiblingEvidence,
-    problems,
+      () =>
+        parseInteger(
+          properties.FOLDER_CREATION_MIN_SIBLING_EVIDENCE,
+          CONFIG_DEFAULTS.folderCreationMinSiblingEvidence,
+          "FOLDER_CREATION_MIN_SIBLING_EVIDENCE",
+          2,
+          100,
+        ),
+      folderCreationMinSiblingEvidence,
+      problems,
     );
   }
 
@@ -352,16 +359,16 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
 
   if (scope === "FULL") {
     folderCreationSemanticGroups = readConfigValue(
-    () =>
-      parseFolderCreationSemanticGroups(
-        properties.FOLDER_CREATION_SEMANTIC_GROUPS_JSON,
-        CONFIG_DEFAULTS.folderCreationSemanticGroups,
-        duplicateFolderName,
-        fallbackFolderName,
-        logFolderName,
-      ),
-    folderCreationSemanticGroups,
-    problems,
+      () =>
+        parseFolderCreationSemanticGroups(
+          properties.FOLDER_CREATION_SEMANTIC_GROUPS_JSON,
+          CONFIG_DEFAULTS.folderCreationSemanticGroups,
+          duplicateFolderName,
+          fallbackFolderName,
+          logFolderName,
+        ),
+      folderCreationSemanticGroups,
+      problems,
     );
   }
 
@@ -419,18 +426,26 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
       `FOLDER_CREATION_CONFIDENCE_THRESHOLD=${folderCreationConfidenceThreshold} must be greater than or equal to CONFIDENCE_THRESHOLD=${confidenceThreshold} when folder proposals are enabled.`,
     );
   }
-  if (scope === "FULL" && folderCreationMaxNewSegments > folderCreationMaxFinalDepth) {
+  if (
+    scope === "FULL" &&
+    folderCreationMaxNewSegments > folderCreationMaxFinalDepth
+  ) {
     problems.push(
       "FOLDER_CREATION_MAX_NEW_SEGMENTS must be less than or equal to FOLDER_CREATION_MAX_FINAL_DEPTH.",
     );
   }
-  if (scope === "FULL" && folderCreationMode !== "OFF" && folderCreationMaxFinalDepth < 2) {
+  if (
+    scope === "FULL" &&
+    folderCreationMode !== "OFF" &&
+    folderCreationMaxFinalDepth < 2
+  ) {
     problems.push(
       "FOLDER_CREATION_MAX_FINAL_DEPTH must be at least 2 when FOLDER_CREATION_MODE is enabled because the root cannot be a creation parent.",
     );
   }
   if (
-    scope === "FULL" && folderCreationMode !== "OFF" &&
+    scope === "FULL" &&
+    folderCreationMode !== "OFF" &&
     folderCreationMinSiblingEvidence > maxCandidateFolders
   ) {
     problems.push(
@@ -438,7 +453,8 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     );
   }
   if (
-    scope === "FULL" && folderCreationMode !== "OFF" &&
+    scope === "FULL" &&
+    folderCreationMode !== "OFF" &&
     folderCreationSemanticGroups.some(
       (group) => group.length < folderCreationMinSiblingEvidence + 1,
     )
@@ -505,6 +521,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     triggerMinutes,
     excludedFolderIds,
     logFolderName,
+    logLevel,
     allowFolderCreation,
     fallbackFolderName,
     folderCreationMode,
@@ -553,6 +570,7 @@ function getSafeConfigSummary(config: AppConfig): Record<string, unknown> {
     triggerMinutes: config.triggerMinutes,
     excludedFolderCount: config.excludedFolderIds.length,
     logFolderName: config.logFolderName,
+    logLevel: config.logLevel,
     allowFolderCreation: config.allowFolderCreation,
     fallbackFolderName: config.fallbackFolderName,
     folderCreationMode: config.folderCreationMode,
@@ -609,7 +627,8 @@ function getSetupInstructions(): string {
     "- RETRY_MAX_DELAY_MS=30000",
     "- TRIGGER_MINUTES=15 (allowed: 1, 5, 10, 15, 30)",
     "- EXCLUDED_FOLDER_IDS=id1,id2 (optional CSV)",
-    "- LOG_FOLDER_NAME=logs (optional direct child of ROOT_FOLDER_ID for audit/report documents)",
+    "- LOG_FOLDER_NAME=logs (optional direct child of ROOT_FOLDER_ID for audit documents)",
+    "- LOG_LEVEL=JSON (allowed: JSON, PRETTY, FULL)",
     "",
     "Set these in Apps Script > Project Settings > Script Properties.",
     "Keep DRY_RUN=true until the manual tests and logs have been reviewed.",
@@ -711,6 +730,25 @@ function parseFolderCreationMode(
     return normalized;
   }
   throw new Error("FOLDER_CREATION_MODE must be OFF, SUGGEST, or AUTO.");
+}
+
+function parseLogLevel(
+  value: string | null | undefined,
+  fallback: LogLevel = CONFIG_DEFAULTS.logLevel,
+): LogLevel {
+  if (value === null || value === undefined || value.trim() === "") {
+    return fallback;
+  }
+
+  const normalized = value.trim().toUpperCase();
+  if (
+    normalized === "JSON" ||
+    normalized === "PRETTY" ||
+    normalized === "FULL"
+  ) {
+    return normalized;
+  }
+  throw new Error("LOG_LEVEL must be JSON, PRETTY, or FULL.");
 }
 
 function parseFolderCreationSemanticGroups(

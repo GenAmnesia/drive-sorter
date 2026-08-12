@@ -1,9 +1,6 @@
 let activePersistentAuditLog: PersistentAuditLogInfo | null = null;
 let persistentAuditLogFailure: string | null = null;
-const HUMAN_REPORT_RAW_LOG_MAX_CHARS = 100_000;
-let persistentAuditSerializedLines: string[] = [];
-let persistentAuditSerializedChars = 0;
-let persistentAuditInputTruncated = false;
+let activeLogLevel: LogLevel = "JSON";
 
 class PersistentAuditLogError extends Error {
   constructor(message: string) {
@@ -23,6 +20,7 @@ function startPersistentAuditLog(
   logFolder: GoogleAppsScript.Drive.Folder,
   runId: string,
   startedAtEpochMs: number,
+  logLevel: LogLevel = activeLogLevel,
 ): PersistentAuditLogInfo {
   if (activePersistentAuditLog !== null) {
     throw new PersistentAuditLogError(
@@ -36,10 +34,8 @@ function startPersistentAuditLog(
     runId,
     startedAtEpochMs,
   );
+  setLogLevel(logLevel);
   persistentAuditLogFailure = null;
-  persistentAuditSerializedLines = [];
-  persistentAuditSerializedChars = 0;
-  persistentAuditInputTruncated = false;
   logPersistentAuditEvent({
     timestamp: isoTimestamp(),
     event: "AUDIT_LOG_STARTED",
@@ -50,8 +46,7 @@ function startPersistentAuditLog(
     logFolderId: activePersistentAuditLog.logFolderId,
     logFolderPath: activePersistentAuditLog.logFolderPath,
     dryRun: false,
-    reason:
-      "Persistent audit document initialized before document processing.",
+    reason: "Persistent audit document initialized before document processing.",
   });
   return { ...activePersistentAuditLog };
 }
@@ -60,27 +55,13 @@ function startPersistentAuditLog(
 function finishPersistentAuditLog(): void {
   activePersistentAuditLog = null;
   persistentAuditLogFailure = null;
-  persistentAuditSerializedLines = [];
-  persistentAuditSerializedChars = 0;
-  persistentAuditInputTruncated = false;
+  activeLogLevel = "JSON";
 }
 
 function getPersistentAuditLogInfo(): PersistentAuditLogInfo | null {
   return activePersistentAuditLog === null
     ? null
     : { ...activePersistentAuditLog };
-}
-
-/** Return the bounded JSONL source that can safely be summarized by Gemini. */
-function getPersistentAuditLogSnapshot(): PersistentAuditLogSnapshot | null {
-  if (activePersistentAuditLog === null) {
-    return null;
-  }
-  return {
-    audit: { ...activePersistentAuditLog },
-    serializedLines: persistentAuditSerializedLines.slice(),
-    inputTruncated: persistentAuditInputTruncated,
-  };
 }
 
 /**
@@ -106,7 +87,6 @@ function appendToPersistentAuditLog(serializedRecord: string): void {
       serializedRecord,
     );
     activePersistentAuditLog.linesWritten += 1;
-    capturePersistentAuditLine(serializedRecord);
   } catch (error: unknown) {
     persistentAuditLogFailure = getErrorMessage(error, 500);
     console.error(
@@ -126,30 +106,31 @@ function appendToPersistentAuditLog(serializedRecord: string): void {
   }
 }
 
-/**
- * Keep an in-memory copy of the exact persisted JSONL for the one optional
- * report request. The authoritative document itself is never truncated.
- */
-function capturePersistentAuditLine(serializedRecord: string): void {
-  if (persistentAuditInputTruncated) {
-    return;
-  }
-  const separatorLength =
-    persistentAuditSerializedLines.length === 0 ? 0 : 1;
-  const nextLength =
-    persistentAuditSerializedChars + separatorLength + serializedRecord.length;
-  if (nextLength > HUMAN_REPORT_RAW_LOG_MAX_CHARS) {
-    persistentAuditInputTruncated = true;
-    return;
-  }
-  persistentAuditSerializedLines.push(serializedRecord);
-  persistentAuditSerializedChars = nextLength;
+/** Select how regular run messages appear in console and the audit document. */
+function setLogLevel(logLevel: LogLevel): void {
+  activeLogLevel = logLevel;
 }
 
-/** Console remains useful in the editor; the same sanitized line is persisted. */
-function emitAuditLine(serializedRecord: string): void {
-  console.log(serializedRecord);
-  appendToPersistentAuditLog(serializedRecord);
+/**
+ * The audit document is an append-only mirror of logger console output. Each
+ * item is emitted and persisted in the same order, including PRETTY/FULL
+ * multi-line messages.
+ */
+function emitAuditLines(lines: readonly string[]): void {
+  lines.forEach((line) => {
+    console.log(line);
+    appendToPersistentAuditLog(line);
+  });
+}
+
+function selectLogOutput(pretty: string, json: string): string[] {
+  if (activeLogLevel === "PRETTY") {
+    return [pretty];
+  }
+  if (activeLogLevel === "FULL") {
+    return [pretty, json];
+  }
+  return [json];
 }
 
 /** Emit an explicit before-mutation marker to the persistent audit document. */
@@ -170,17 +151,21 @@ function logPersistentAuditIntent(record: PersistentAuditIntentRecord): void {
         : truncateString(redactSensitiveText(record.destinationPath), 1_000),
     reason: truncateString(redactSensitiveText(record.reason), 1_000),
   };
-  emitAuditLine(safeJsonStringify(sanitized));
+  const json = safeJsonStringify(sanitized);
+  emitAuditLines(selectLogOutput(formatPrettyAuditIntent(sanitized), json));
 }
 
 /** Persist a bounded lifecycle record that is not a normal file/batch result. */
 function logPersistentAuditEvent(record: Record<string, unknown>): void {
-  emitAuditLine(safeJsonStringify(record));
+  const json = safeJsonStringify(record);
+  emitAuditLines(selectLogOutput(formatPrettyAuditEvent(record), json));
 }
 
-/** Emit one complete, single-line JSON record for a processed file. */
+/** Emit one complete file record in the configured logger representation. */
 function logOperation(record: StructuredLogRecord): void {
-  emitAuditLine(safeJsonStringify(sanitizeStructuredLogRecord(record)));
+  const sanitized = sanitizeStructuredLogRecord(record);
+  const json = safeJsonStringify(sanitized);
+  emitAuditLines(selectLogOutput(formatPrettyFileOperation(sanitized), json));
 }
 
 /** Alias with an explicit name for callers that prefer it. */
@@ -188,9 +173,11 @@ function logFileOperation(record: StructuredLogRecord): void {
   logOperation(record);
 }
 
-/** Emit one complete, single-line JSON record for a batch lifecycle event. */
+/** Emit one complete batch record in the configured logger representation. */
 function logBatch(record: BatchLogRecord): void {
-  emitAuditLine(safeJsonStringify(sanitizeBatchLogRecord(record)));
+  const sanitized = sanitizeBatchLogRecord(record);
+  const json = safeJsonStringify(sanitized);
+  emitAuditLines(selectLogOutput(formatPrettyBatch(sanitized), json));
 }
 
 function logBatchEvent(record: BatchLogRecord): void {
@@ -365,4 +352,221 @@ function sanitizeBatchLogRecord(record: BatchLogRecord): BatchLogRecord {
         ? null
         : truncateString(redactSensitiveText(record.message), 2_000),
   };
+}
+
+const PRETTY_LOG_SEPARATOR = "================================================================";
+const PRETTY_LOG_SUBSEPARATOR = "----------------------------------------------------------------";
+
+/**
+ * Render one file result as a compact, scan-friendly hierarchy. Labels are
+ * deliberately English; values remain the already-sanitized source data.
+ */
+function formatPrettyFileOperation(record: StructuredLogRecord): string {
+  const classification = record.classification;
+  const operation = record.wouldAction === null
+    ? record.action
+    : `${record.action} (planned: ${record.wouldAction})`;
+  const additional: string[] = [
+    `File ID: ${formatPrettyValue(record.fileId)}`,
+    `MIME type: ${formatPrettyValue(record.mimeType)}`,
+    `Size: ${formatPrettyFileSize(record.sizeBytes)}`,
+    `Execution: ${record.dryRun ? "Dry run — no file change applied" : "Live run"}`,
+    `Duration: ${formatPrettyDuration(record.durationMs)}`,
+  ];
+
+  if (record.resultingFilename !== null) {
+    additional.push(`Resulting file name: ${formatPrettyValue(record.resultingFilename)}`);
+  }
+  if (record.duplicateOfFileId !== null) {
+    additional.push(`Exact duplicate of file ID: ${formatPrettyValue(record.duplicateOfFileId)}`);
+  }
+  if (record.possibleDuplicateOfFileIds.length > 0) {
+    additional.push(
+      `Possible duplicate file IDs (${record.possibleDuplicateOfFileIds.length}): ${record.possibleDuplicateOfFileIds.map(formatPrettyValue).join(", ")}`,
+    );
+  }
+  if (record.errorKind !== null) {
+    additional.push(`Error category: ${formatPrettyValue(record.errorKind)}`);
+  }
+  if (record.error !== null) {
+    additional.push(`Error: ${formatPrettyValue(record.error.message)}`);
+  }
+  if (record.reason !== null && record.reason !== classification?.reason) {
+    additional.push(`Processing reason: ${formatPrettyValue(record.reason)}`);
+  }
+  appendPrettyFolderCreationDetails(additional, record);
+
+  return formatPrettyMessage("FILE OPERATION", [
+    "File",
+    `  Name: ${formatPrettyValue(record.originalFilename)}`,
+    "Operation",
+    `  Action: ${formatPrettyValue(operation)}`,
+    "Destination",
+    `  Path: ${formatPrettyNullableValue(record.destinationPath)}`,
+    `  Folder ID: ${formatPrettyNullableValue(record.destinationFolderId)}`,
+    "Gemini assessment",
+    `  Document type: ${formatPrettyNullableValue(classification?.documentType ?? null)}`,
+    `  Confidence: ${formatPrettyConfidence(classification?.confidence ?? null)}`,
+    `  Reason: ${formatPrettyNullableValue(classification?.reason ?? null)}`,
+    `  Suggested file name: ${formatPrettyNullableValue(classification?.suggestedFilename ?? null)}`,
+    "Additional information",
+    ...additional.map((detail) => `  ${detail}`),
+  ]);
+}
+
+/** The STARTED and terminal batch records are the dedicated PRETTY run banners. */
+function formatPrettyBatch(record: BatchLogRecord): string {
+  if (record.status === "STARTED") {
+    return formatPrettyMessage("DRIVE SORTER | RUN STARTED", [
+      `Run ID: ${formatPrettyValue(record.runId)}`,
+      `Execution mode: ${record.dryRun ? "DRY RUN" : "LIVE"}`,
+      "The audit log is active. File processing is starting now.",
+    ]);
+  }
+
+  const title = record.status === "COMPLETED"
+    ? "DRIVE SORTER | RUN COMPLETED"
+    : record.status === "FAILED"
+      ? "DRIVE SORTER | RUN FAILED"
+      : "DRIVE SORTER | RUN SKIPPED";
+  const summary = [
+    "Summary",
+    `  Processed: ${record.processed}`,
+    `  Moved: ${record.moved}`,
+    `  Sent for review: ${record.reviewed}`,
+    `  Duplicates: ${record.duplicates}`,
+    `  Unsupported: ${record.unsupported}`,
+    `  Errors: ${record.errors}`,
+    `  Skipped: ${record.skipped}`,
+    `  Folder proposals: ${record.folderProposals ?? 0}`,
+    `  Accepted proposals: ${record.acceptedFolderProposals ?? 0}`,
+    `  Created folders: ${record.createdFolders ?? 0}`,
+    `  Elapsed time: ${formatPrettyDuration(record.elapsedMs)}`,
+  ];
+  if (record.message !== null) {
+    summary.push(`Details: ${formatPrettyValue(record.message)}`);
+  }
+  return formatPrettyMessage(title, [
+    `Run ID: ${formatPrettyValue(record.runId)}`,
+    `Execution mode: ${record.dryRun ? "DRY RUN" : "LIVE"}`,
+    ...summary,
+  ]);
+}
+
+function formatPrettyAuditIntent(record: PersistentAuditIntentRecord): string {
+  return formatPrettyMessage("ACTION INTENT", [
+    `Action: ${formatPrettyValue(record.action)}`,
+    `File ID: ${formatPrettyNullableValue(record.fileId)}`,
+    "Destination",
+    `  Path: ${formatPrettyNullableValue(record.destinationPath)}`,
+    `  Folder ID: ${formatPrettyNullableValue(record.destinationFolderId)}`,
+    `Execution mode: ${record.dryRun ? "DRY RUN" : "LIVE"}`,
+    `Reason: ${formatPrettyValue(record.reason)}`,
+  ]);
+}
+
+function formatPrettyAuditEvent(record: Record<string, unknown>): string {
+  const event = typeof record.event === "string" ? record.event : "LOG_EVENT";
+  const reason = typeof record.reason === "string" ? record.reason : null;
+  const error = typeof record.error === "string" ? record.error : null;
+  const failedAttempt = typeof record.failedAttempt === "number"
+    ? record.failedAttempt
+    : null;
+  const nextAttempt = typeof record.nextAttempt === "number"
+    ? record.nextAttempt
+    : null;
+  const httpStatus = typeof record.httpStatus === "number"
+    ? record.httpStatus
+    : null;
+  const delayMs = typeof record.delayMs === "number" ? record.delayMs : null;
+  const details = [
+    `Event: ${formatPrettyValue(event)}`,
+    ...(failedAttempt === null ? [] : [`Failed attempt: ${failedAttempt}`]),
+    ...(nextAttempt === null ? [] : [`Next attempt: ${nextAttempt}`]),
+    ...(httpStatus === null ? [] : [`HTTP status: ${httpStatus}`]),
+    ...(delayMs === null ? [] : [`Retry delay: ${delayMs} ms`]),
+    ...(reason === null ? [] : [`Details: ${formatPrettyValue(reason)}`]),
+    ...(error === null ? [] : [`Error: ${formatPrettyValue(error)}`]),
+  ];
+  return formatPrettyMessage("RUN EVENT", details);
+}
+
+function appendPrettyFolderCreationDetails(
+  details: string[],
+  record: StructuredLogRecord,
+): void {
+  if (record.folderCreationMode !== undefined) {
+    details.push(`Folder creation mode: ${formatPrettyValue(record.folderCreationMode)}`);
+  }
+  if (record.folderCreationDecision !== undefined) {
+    details.push(`Folder creation decision: ${formatPrettyValue(record.folderCreationDecision)}`);
+  }
+  if (record.folderCreationThresholdPassed !== undefined && record.folderCreationThresholdPassed !== null) {
+    details.push(`Folder creation confidence threshold: ${record.folderCreationThresholdPassed ? "Passed" : "Not passed"}`);
+  }
+  if (record.folderCreationProposal !== undefined && record.folderCreationProposal !== null) {
+    details.push(`Proposed folder: ${formatPrettyValue(`${record.folderCreationProposal.parentFolderPath}/${record.folderCreationProposal.proposedSegments.join("/")}`)}`);
+    details.push(`Proposal confidence: ${formatPrettyConfidence(record.folderCreationProposal.confidence)}`);
+    details.push(`Proposal reason: ${formatPrettyValue(record.folderCreationProposal.reason)}`);
+  }
+  if (record.folderCreationProposalErrors !== undefined && record.folderCreationProposalErrors.length > 0) {
+    details.push(`Folder proposal validation errors: ${record.folderCreationProposalErrors.map(formatPrettyValue).join(" | ")}`);
+  }
+  if (record.createdFolderPath !== undefined && record.createdFolderPath !== null) {
+    details.push(`Created folder: ${formatPrettyValue(record.createdFolderPath)}`);
+  }
+  if (record.createdFolders !== undefined && record.createdFolders.length > 0) {
+    details.push(`Created folders (${record.createdFolders.length}): ${record.createdFolders.map((folder) => `${folder.purpose}: ${formatPrettyValue(folder.path)}`).join(" | ")}`);
+  }
+  if (record.folderCreationPartialMutation === true) {
+    details.push("Folder creation state: Partial mutation detected");
+  }
+}
+
+function formatPrettyMessage(title: string, lines: readonly string[]): string {
+  return [
+    PRETTY_LOG_SEPARATOR,
+    title,
+    PRETTY_LOG_SUBSEPARATOR,
+    ...lines,
+    PRETTY_LOG_SEPARATOR,
+  ].join("\n");
+}
+
+function formatPrettyNullableValue(value: string | null): string {
+  return value === null ? "Not available" : formatPrettyValue(value);
+}
+
+function formatPrettyValue(value: string): string {
+  return value
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim() || "Not available";
+}
+
+function formatPrettyConfidence(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) {
+    return "Not available";
+  }
+  return `${(value * 100).toFixed(1)}% (${value.toFixed(2)})`;
+}
+
+function formatPrettyDuration(value: number | null): string {
+  if (value === null || !Number.isFinite(value) || value < 0) {
+    return "Not available";
+  }
+  return `${value} ms`;
+}
+
+function formatPrettyFileSize(value: number | null): string {
+  if (value === null || !Number.isFinite(value) || value < 0) {
+    return "Not available";
+  }
+  if (value < 1_024) {
+    return `${value} B`;
+  }
+  if (value < 1_048_576) {
+    return `${(value / 1_024).toFixed(1)} KB`;
+  }
+  return `${(value / 1_048_576).toFixed(1)} MB`;
 }

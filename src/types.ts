@@ -6,6 +6,7 @@
  */
 
 type ConfigScope = "DRIVE" | "GEMINI" | "FULL";
+type LogLevel = "JSON" | "PRETTY" | "FULL";
 type FolderCreationMode = "OFF" | "SUGGEST" | "AUTO";
 type FolderCreationPatternType = "TEMPORAL" | "SEMANTIC" | "OTHER";
 type CreatedFolderPurpose = "TAXONOMY" | "DUPLICATES";
@@ -47,6 +48,7 @@ interface AppConfig {
   triggerMinutes: number;
   excludedFolderIds: string[];
   logFolderName: string;
+  logLevel: LogLevel;
   allowFolderCreation: boolean;
   fallbackFolderName: string;
   folderCreationMode: FolderCreationMode;
@@ -365,7 +367,8 @@ interface BatchLogRecord {
 
 /**
  * Metadata for the append-only Google Doc created for one runSorter execution.
- * The document contains only already-sanitized audit JSON records.
+ * The document contains only already-sanitized logger output in the configured
+ * JSON, PRETTY, or FULL representation.
  */
 interface PersistentAuditLogInfo {
   runId: string;
@@ -390,74 +393,4 @@ interface PersistentAuditIntentRecord {
   destinationPath: string | null;
   dryRun: boolean;
   reason: string;
-}
-
-/** Bounded, already-sanitized source captured from the authoritative audit Doc. */
-interface PersistentAuditLogSnapshot {
-  audit: PersistentAuditLogInfo;
-  serializedLines: string[];
-  inputTruncated: boolean;
-}
-
-interface HumanReportFileOutcome {
-  fileId: string;
-  originalFilename: string;
-  action: LogAction;
-  wouldAction: LogAction | null;
-  destinationPath: string | null;
-  resultingFilename: string | null;
-  duplicateOfFileId: string | null;
-  errorKind: ProcessingErrorKind | null;
-  reason: string | null;
-}
-
-interface HumanReportBatchOutcome {
-  status: BatchLogStatus | null;
-  dryRun: boolean | null;
-  processed: number;
-  moved: number;
-  reviewed: number;
-  duplicates: number;
-  unsupported: number;
-  errors: number;
-  skipped: number;
-}
-
-interface HumanReportSource {
-  audit: PersistentAuditLogInfo;
-  rawAuditJsonl: string;
-  inputTruncated: boolean;
-  fileOutcomes: HumanReportFileOutcome[];
-  batch: HumanReportBatchOutcome;
-}
-
-type HumanReportAttention = "INFO" | "WARNING" | "ERROR";
-
-interface HumanReportFileNote {
-  fileId: string;
-  attention: HumanReportAttention;
-  note: string;
-}
-
-/** Gemini-generated prose only; trusted fields stay application-derived. */
-interface HumanReadableRunReport {
-  headline: string;
-  summary: string;
-  fileNotes: HumanReportFileNote[];
-  warnings: string[];
-  nextSteps: string[];
-}
-
-type HumanReportValidationResult =
-  | { valid: true; value: HumanReadableRunReport; errors: [] }
-  | { valid: false; value: null; errors: string[] };
-
-interface HumanReadableReportDocumentInfo {
-  documentId: string;
-  fileId: string;
-  filename: string;
-  rootFolderId: string;
-  logFolderId: string;
-  logFolderPath: string;
-  rawAuditDocumentId: string;
 }

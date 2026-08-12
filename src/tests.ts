@@ -42,7 +42,13 @@ function testPersistentAuditLog(): void {
   const startedAt = Date.now();
   const runId = createRunId();
   const logFolder = ensureAuditLogFolder(config, context).folder;
-  const audit = startPersistentAuditLog(context.root, logFolder, runId, startedAt);
+  const audit = startPersistentAuditLog(
+    context.root,
+    logFolder,
+    runId,
+    startedAt,
+    config.logLevel,
+  );
 
   try {
     logPersistentAuditEvent({
@@ -61,40 +67,55 @@ function testPersistentAuditLog(): void {
 }
 
 /**
- * End-to-end smoke test for the Gemini companion report. It writes only a new
- * synthetic raw audit and its report into ROOT_FOLDER_ID; no inbox file or
- * folder is read, moved, renamed, or created.
+ * Smoke test for the English PRETTY presentation. It writes one synthetic
+ * audit document only; no Gemini request, inbox file, or taxonomy folder is
+ * read, moved, renamed, or created.
  */
-function testHumanReadableReport(): void {
-  const config = getAppConfig("FULL");
+function testPrettyLogger(): void {
+  const config = getAppConfig("DRIVE");
   const context = validateDriveConfiguration(config);
   const startedAt = Date.now();
-  const deadlineEpochMs = startedAt + Math.min(config.maxRunMillis, 60_000);
   const runId = createRunId();
   const logFolder = ensureAuditLogFolder(config, context).folder;
-  startPersistentAuditLog(context.root, logFolder, runId, startedAt);
+  startPersistentAuditLog(context.root, logFolder, runId, startedAt, "PRETTY");
 
   try {
+    logBatch(
+      createBatchLogRecord({
+        runId,
+        status: "STARTED",
+        dryRun: true,
+        processed: 0,
+        moved: 0,
+        reviewed: 0,
+        duplicates: 0,
+        unsupported: 0,
+        errors: 0,
+        skipped: 0,
+        elapsedMs: Date.now() - startedAt,
+        message: "Synthetic PRETTY logger smoke test.",
+      }),
+    );
     logOperation(
       createStructuredLogRecord({
         runId,
-        fileId: "manual-human-report-smoke-test",
-        originalFilename: "Esempio report leggibile.pdf",
+        fileId: "manual-pretty-logger-smoke-test",
+        originalFilename: "Pretty logger example.pdf",
         mimeType: "application/pdf",
         sizeBytes: 0,
         classification: null,
         action: "DRY_RUN",
         wouldAction: "MOVE",
         destinationFolderId: null,
-        destinationPath: "Esempio/Destinazione",
-        resultingFilename: "Esempio report leggibile.pdf",
+        destinationPath: "Example/Destination",
+        resultingFilename: "Pretty logger example.pdf",
         duplicateOfFileId: null,
         possibleDuplicateOfFileIds: [],
         errorKind: null,
         error: null,
         dryRun: true,
         durationMs: 0,
-        reason: "Record sintetico per verificare il report leggibile.",
+        reason: "Synthetic record for the PRETTY logger smoke test.",
       }),
     );
     logBatch(
@@ -110,20 +131,9 @@ function testHumanReadableReport(): void {
         errors: 0,
         skipped: 0,
         elapsedMs: Date.now() - startedAt,
-        message: "Synthetic human-readable report smoke test.",
+        message: "Synthetic PRETTY logger smoke test completed.",
       }),
     );
-    const report = finalizeHumanReadableRunReport(
-      config,
-      logFolder,
-      runId,
-      deadlineEpochMs,
-    );
-    if (report === null) {
-      throw new Error(
-        "Human-readable report was not created; inspect the raw audit log for HUMAN_REPORT_ERROR.",
-      );
-    }
   } finally {
     finishPersistentAuditLog();
   }
