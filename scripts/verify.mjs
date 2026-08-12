@@ -718,10 +718,19 @@ evaluate(`
   globalThis.__originalBuildReviewPlan = buildReviewPlan;
   try {
     proposeFolderFromReview = function () {
-      return {
-        status:'INVALID',proposal:null,
-        errors:['proposal confidence is below the creation threshold']
-      };
+      if (globalThis.__proposalMock === 'API_ERROR') {
+        throw new SorterError(
+          'API_ERROR',
+          'FOLDER_PROPOSAL_UNAVAILABLE',
+          'Folder proposal service unavailable.',
+          {retryable:true}
+        );
+      }
+      return globalThis.__proposalMock;
+    };
+    globalThis.__proposalMock = {
+      status:'INVALID',proposal:null,
+      errors:['proposal confidence is below the creation threshold']
     };
     buildClassifiedPlan = function (_file, snapshot, classification) {
       return {
@@ -800,6 +809,42 @@ evaluate(`
       Date.now()+10000,
       {apiError:false,requestMade:false}
     );
+    globalThis.__proposalMock = {
+      status:'VALID',proposal:${JSON.stringify(semanticFolderProposal)},errors:[]
+    };
+    globalThis.__suggestFallbackPlan = buildFolderProposalOrFallbackPlan(
+      __fallbackFile,
+      __fallbackSnapshot,
+      __fallbackDocument,
+      {
+        targetFolderId:'roma_imu',targetFolderPath:'Casa/Roma/IMU',
+        documentType:'tributo',suggestedFilename:null,confidence:0.90,
+        reason:'existing target above normal threshold'
+      },
+      'eligible proposal',
+      {...__folderProposalConfig,folderCreationMode:'SUGGEST'},
+      {},
+      __folderProposalIndex,
+      Date.now()+10000,
+      {apiError:false,requestMade:false}
+    );
+    globalThis.__proposalMock = 'API_ERROR';
+    globalThis.__suggestApiFallbackPlan = buildFolderProposalOrFallbackPlan(
+      __fallbackFile,
+      __fallbackSnapshot,
+      __fallbackDocument,
+      {
+        targetFolderId:'roma_imu',targetFolderPath:'Casa/Roma/IMU',
+        documentType:'tributo',suggestedFilename:null,confidence:0.90,
+        reason:'existing target above normal threshold'
+      },
+      'proposal unavailable',
+      {...__folderProposalConfig,folderCreationMode:'SUGGEST'},
+      {},
+      __folderProposalIndex,
+      Date.now()+10000,
+      {apiError:false,requestMade:false}
+    );
   } finally {
     proposeFolderFromReview = __originalProposeFolderFromReview;
     buildClassifiedPlan = __originalBuildClassifiedPlan;
@@ -821,19 +866,44 @@ assert.equal(
   "REVIEW",
   "OFF must preserve the original review behavior when no existing target is available.",
 );
+assert.equal(
+  evaluate("__suggestFallbackPlan.action"),
+  "MOVE",
+  "SUGGEST must retain the normal existing-folder action instead of planning a folder creation.",
+);
+assert.equal(evaluate("__suggestFallbackPlan.folderCreationDecision"), "SUGGESTED");
+assert.deepEqual(
+  JSON.parse(evaluate("JSON.stringify(__suggestFallbackPlan.folderCreationProposal)")),
+  semanticFolderProposal,
+  "An eligible suggestion must be retained in the output metadata.",
+);
+assert.equal(
+  evaluate("__suggestApiFallbackPlan.action"),
+  "MOVE",
+  "A failed optional SUGGEST request must not block normal routing.",
+);
+assert.equal(evaluate("__suggestApiFallbackPlan.folderCreationDecision"), "API_ERROR");
+assert.equal(
+  evaluate("summarizePlan(__suggestApiFallbackPlan).folderProposalApiErrors"),
+  1,
+  "A non-blocking SUGGEST API failure must still be counted in batch output.",
+);
 
 evaluate(`
   globalThis.__legacyFallbackCreateCalls = 0;
   globalThis.__legacyFallbackResult = maybeCreateFallbackFolder(
     {
       allowFolderCreation:true,dryRun:false,folderCreationMode:'SUGGEST',
-      fallbackFolderName:'Altro',duplicateFolderName:'Duplicati'
+      fallbackFolderName:'Altro',duplicateFolderName:'Duplicati',logFolderName:'logs'
     },
     {
       root:{
+        getFolders:function () {
+          return {hasNext:function () { return false; }};
+        },
         createFolder:function () {
           globalThis.__legacyFallbackCreateCalls += 1;
-          throw new Error('SUGGEST must not create the legacy fallback');
+          return {getId:function () { return 'fallback'; }};
         }
       },
       inbox:{getName:function () { return 'Da smistare'; }},
@@ -842,11 +912,11 @@ evaluate(`
     {folders:[]}
   );
 `);
-assert.equal(evaluate("__legacyFallbackResult"), false);
+assert.equal(evaluate("__legacyFallbackResult"), true);
 assert.equal(
   evaluate("__legacyFallbackCreateCalls"),
-  0,
-  "SUGGEST must suppress legacy fallback creation even when DRY_RUN=false and ALLOW_FOLDER_CREATION=true.",
+  1,
+  "SUGGEST must retain the same explicit empty-tree fallback behavior as OFF.",
 );
 
 const diagnosticEnvelope = JSON.stringify({
@@ -996,11 +1066,22 @@ evaluate(`
   globalThis.__originalSuggestionApply = applyFileActionPlan;
   globalThis.__originalSuggestionLog = logOperation;
   try {
-    applyFileActionPlan = function () {
+    applyFileActionPlan = function (_fileId, plan) {
       globalThis.__suggestMutationBoundaryCalls += 1;
-      throw new Error('SUGGEST must not enter applyFileActionPlan');
+      globalThis.__suggestMutationPlanAction = plan.action;
+      return {
+        destinationFolderId:plan.destinationFolderId,
+        destinationPath:plan.destinationPath,
+        resultingFilename:plan.destinationFilename,
+        moved:true,renamed:false,createdFolder:false,
+        createdFolderId:null,createdFolderPath:null,
+        effectiveAction:plan.action,createdFolders:[],
+        duplicateOfFileId:null,possibleDuplicateOfFileIds:[]
+      };
     };
-    logOperation = function () {};
+    logOperation = function (record) {
+      globalThis.__suggestOperationLog = record;
+    };
     globalThis.__suggestExecutionSummary = executeAndLogFilePlan(
       {
         getId:function () { return 'file'; },
@@ -1008,13 +1089,14 @@ evaluate(`
         getMimeType:function () { return 'application/pdf'; }
       },
       {
-        action:'SUGGEST_FOLDER',destinationFolderId:null,
-        destinationPath:'Casa/Roma/TASI',destinationFilename:null,
+        action:'MOVE',destinationFolderId:'roma_imu',
+        destinationPath:'Casa/Roma/IMU',destinationFilename:'doc.pdf',
         duplicateOfFileId:null,exactDuplicateSha256:null,
         possibleDuplicateOfFileIds:[],classification:null,
-        errorKind:'CLASSIFICATION_UNCERTAIN',reason:'read-only suggestion',
-        requiresFolderCreation:true,folderCreationDecision:'SUGGESTED',
+        errorKind:null,reason:'existing-folder route with suggestion',
+        requiresFolderCreation:false,folderCreationDecision:'SUGGESTED',
         folderCreationProposalRequestMade:true,
+        folderCreationProposal:${JSON.stringify(semanticFolderProposal)},
         sourceSnapshot:{
           id:'file',name:'doc.pdf',mimeType:'application/pdf',sizeBytes:3,
           lastUpdatedEpochMs:1000
@@ -1030,7 +1112,7 @@ evaluate(`
       Date.now(),
       3,
       null,
-      Date.now()+10000
+      Date.now()+20000
     );
   } finally {
     applyFileActionPlan = __originalSuggestionApply;
@@ -1039,10 +1121,18 @@ evaluate(`
 `);
 assert.equal(
   evaluate("__suggestMutationBoundaryCalls"),
-  0,
-  "SUGGEST execution must return before calling the Drive mutation boundary.",
+  1,
+  "SUGGEST must execute the same normal routing action as OFF.",
 );
-assert.equal(evaluate("__suggestExecutionSummary.skipped"), 1);
+assert.equal(evaluate("__suggestMutationPlanAction"), "MOVE");
+assert.equal(evaluate("__suggestExecutionSummary.moved"), 1);
+assert.equal(evaluate("__suggestOperationLog.action"), "MOVE");
+assert.equal(evaluate("__suggestOperationLog.folderCreationDecision"), "SUGGESTED");
+assert.equal(
+  evaluate("__suggestOperationLog.folderCreationProposal.parentFolderPath"),
+  "Casa/Roma",
+  "The applied action log must retain the eligible proposed folder.",
+);
 
 evaluate(`
   globalThis.__persistentAuditLines = [];

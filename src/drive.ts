@@ -207,7 +207,8 @@ function buildPersistentAuditLogFilename(
 /**
  * Create the one audit document for a run and place only that new file in the
  * configured root. This is the only intentional audit-only write exception to
- * DRY_RUN/SUGGEST; it never changes a classified document or existing file.
+ * DRY_RUN. Folder-proposal SUGGEST mode may still route classified documents;
+ * it only prevents the proposal itself from creating taxonomy folders.
  */
 function createPersistentAuditDocument(
   root: GoogleAppsScript.Drive.Folder,
@@ -297,8 +298,7 @@ function maybeCreateFallbackFolder(
   if (
     index.folders.length > 0 ||
     !config.allowFolderCreation ||
-    config.dryRun ||
-    config.folderCreationMode === "SUGGEST"
+    config.dryRun
   ) {
     return false;
   }

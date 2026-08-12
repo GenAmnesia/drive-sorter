@@ -27,8 +27,8 @@ Per ogni esecuzione, `runSorter()`:
 6. chiede a Gemini una risposta JSON strutturata;
 7. valida a runtime ogni campo e la coppia esatta `folderId`/`path`;
 8. applica `CONFIDENCE_THRESHOLD` alla destinazione esistente e, se abilitato, valuta con una sola richiesta aggiuntiva una cartella foglia mancante usando una soglia distinta e più alta;
-9. se la creazione non è autorizzata, conserva la destinazione esistente quando supera la sua soglia normale; altrimenti, in `OFF`/`AUTO`, pianifica `Da controllare`;
-10. controlla duplicati e collisioni e applica un unico piano validato; in `DRY_RUN` e `SUGGEST` non modifica i documenti classificati;
+9. se la creazione non è autorizzata, conserva la destinazione esistente quando supera la sua soglia normale; altrimenti pianifica `Da controllare`; in `SUGGEST` registra anche l'eventuale proposta eleggibile;
+10. controlla duplicati e collisioni e applica un unico piano validato; soltanto `DRY_RUN` non modifica i documenti classificati;
 11. crea nella root un solo Google Doc di audit per il run e vi salva progressivamente l'esatto output del logger mostrato in console.
 
 Il contenuto del documento è trattato nel prompt come dato non affidabile. Istruzioni presenti nel file, inclusi tentativi di prompt injection come “ignora le istruzioni precedenti”, non autorizzano alcuna operazione.
@@ -255,7 +255,7 @@ Tutte le proprietà sono stringhe nell'interfaccia Apps Script. Usare esattament
 | `EXCLUDED_FOLDER_IDS` | vuoto | Lista CSV di folder ID, senza URL; esclude l'intero sottoalbero e non può contenere `ROOT_FOLDER_ID`. |
 | `ALLOW_FOLDER_CREATION` | `false` | Abilita soltanto il rarissimo fallback descritto sotto. |
 | `FALLBACK_FOLDER_NAME` | `Altro` | Nome applicativo fisso e validato, mai suggerito da Gemini. |
-| `FOLDER_CREATION_MODE` | `AUTO` | `OFF`, `SUGGEST` o `AUTO`; `SUGGEST` non modifica documenti o cartelle tassonomiche, ma conserva il Google Doc di audit; `AUTO` abilita la sola creazione validata. |
+| `FOLDER_CREATION_MODE` | `AUTO` | `OFF`, `SUGGEST` o `AUTO`; `SUGGEST` instrada i file esattamente come `OFF` e aggiunge all'audit una proposta eleggibile, senza mai crearla; `AUTO` abilita la sola creazione validata. |
 | `FOLDER_CREATION_CONFIDENCE_THRESHOLD` | `0.97` | Soglia `0..1` distinta; con `SUGGEST`/`AUTO` deve essere almeno `CONFIDENCE_THRESHOLD`. |
 | `FOLDER_CREATION_MAX_FINAL_DEPTH` | `MAX_FOLDER_DEPTH` | Profondità finale `1..100`, misurata dalla root e mai superiore a `MAX_FOLDER_DEPTH`. |
 | `FOLDER_CREATION_MAX_NEW_SEGMENTS` | `1` | Intero `1..10`; in questa versione `AUTO` accetta comunque esattamente una nuova foglia. |
@@ -294,7 +294,7 @@ I valori in `src/config.ts` sono i default dell’applicazione; una Script Prope
 | DOCX | Conversione Apps Script in PDF, poi invio inline. |
 | Google Docs | Esportazione in PDF tramite `getAs`, poi invio inline. |
 
-Audio, video, fogli, presentazioni, archivi, shortcut e altri MIME non sono supportati da questa versione, anche se il modello scelto potrebbe accettarli. Un formato non supportato o un file oltre `MAX_INPUT_BYTES` produce `UNSUPPORTED`: in `DRY_RUN`/`SUGGEST` viene solo registrato; con scritture abilitate in `OFF`/`AUTO` viene spostato in review con un nome non conflittuale. Un fallimento della conversione DOC/DOCX/Google Docs è invece trattato prudentemente come `API_ERROR`, perché il codice non può distinguere un outage/quota temporaneo da un limite permanente: il file resta nella inbox anche fuori da `DRY_RUN`.
+Audio, video, fogli, presentazioni, archivi, shortcut e altri MIME non sono supportati da questa versione, anche se il modello scelto potrebbe accettarli. Un formato non supportato o un file oltre `MAX_INPUT_BYTES` produce `UNSUPPORTED`: in `DRY_RUN` viene solo registrato; con scritture abilitate viene spostato in review con un nome non conflittuale, anche in `SUGGEST`. Un fallimento della conversione DOC/DOCX/Google Docs è invece trattato prudentemente come `API_ERROR`, perché il codice non può distinguere un outage/quota temporaneo da un limite permanente: il file resta nella inbox anche fuori da `DRY_RUN`.
 
 Il limite viene ricontrollato dopo la conversione. I file Google Workspace possono riportare dimensione zero prima dell'esportazione. Base64, quote `UrlFetchApp`, conversioni Apps Script e limiti del modello introducono ulteriori limiti effettivi: aumentare `MAX_INPUT_BYTES` fino al massimo configurabile non garantisce che una richiesta molto grande riesca. Il default di 10 MiB è intenzionalmente conservativo.
 
@@ -315,7 +315,7 @@ Gemini deve restituire esattamente:
 
 L'applicazione non usa il type system come confine di sicurezza. Controlla JSON, campi mancanti o extra, tipi, stringhe, caratteri di controllo, lunghezze, confidenza finita `0..1`, coerenza dei due campi null e corrispondenza esatta della coppia ID/path con l'indice affidabile.
 
-Un ID inventato, un path non corrispondente, risposta bloccata/mancante, JSON invalido o schema non conforme diventa `CLASSIFICATION_UNCERTAIN`: con scritture abilitate in `OFF`/`AUTO` va in review; in `DRY_RUN`/`SUGGEST` resta nella inbox con il relativo log. Per una destinazione nulla o sotto soglia, `AUTO` può prima valutare la proposta descritta sotto e applica poi il fallback a cartella esistente o review. Un errore `API_ERROR` o `INTERNAL_ERROR` lascia invece il file nella inbox quando possibile, in modo da non confondere un outage con una decisione documentale.
+Un ID inventato, un path non corrispondente, risposta bloccata/mancante, JSON invalido o schema non conforme diventa `CLASSIFICATION_UNCERTAIN`: con scritture abilitate va in review; in `DRY_RUN` resta nella inbox con il relativo log. Per una destinazione nulla o sotto soglia, `SUGGEST` e `AUTO` possono prima valutare la proposta descritta sotto e applicano poi il fallback a cartella esistente o review. Un errore della classificazione `API_ERROR` o `INTERNAL_ERROR` lascia invece il file nella inbox quando possibile, in modo da non confondere un outage con una decisione documentale.
 
 ### Due soglie indipendenti e fallback
 
@@ -326,14 +326,14 @@ Esempio: Gemini classifica un file verso `Casa/Roma/IMU` con confidenza `0.90`. 
 | Modalità | Nessuna creazione autorizzata | Scritture Drive |
 | --- | --- | --- |
 | `OFF` | Usa una destinazione esistente se raggiunge `CONFIDENCE_THRESHOLD`; altrimenti `Da controllare`. Non esegue la seconda richiesta Gemini. | Normali, salvo `DRY_RUN`. |
-| `SUGGEST` | Logga proposta e decisione e lascia sempre il file nella inbox, anche se esiste un fallback. | Nessuna su documenti/tassonomia; crea soltanto il nuovo audit append-only. |
+| `SUGGEST` | Si comporta come `OFF`: usa la destinazione esistente se supera `CONFIDENCE_THRESHOLD`, altrimenti `Da controllare`. Se la proposta è eleggibile, la aggiunge al log/output. | Scritture normali su documenti, review, duplicati e fallback esplicito; nessuna creazione di cartelle dalla proposta. |
 | `AUTO` | Usa il fallback esistente se raggiunge `CONFIDENCE_THRESHOLD`; altrimenti `Da controllare`. | Può creare e poi spostare soltanto dopo tutti i controlli. |
 
 `DRY_RUN=true` prevale su tutte le modalità e impedisce ogni scrittura su documenti classificati e cartelle tassonomiche; il nuovo documento append-only di audit resta intenzionalmente attivo.
 
 ## Proposte di nuove cartelle dalla review
 
-La fase opzionale viene considerata soltanto con `SUGGEST` o `AUTO`, dopo una classificazione normale valida, quando non è stata scelta alcuna destinazione oppure la sua confidenza è inferiore alla soglia di creazione. Non viene avviata per formati non supportati, output iniziale invalido, errori API o errori interni. Riusa lo stesso documento preparato e lo stesso indice e fa al massimo una richiesta Gemini aggiuntiva per file/run.
+La fase opzionale viene considerata soltanto con `SUGGEST` o `AUTO`, dopo una classificazione normale valida, quando non è stata scelta alcuna destinazione oppure la sua confidenza è inferiore alla soglia di creazione. Non viene avviata per formati non supportati, output iniziale invalido, errori API o errori interni. Riusa lo stesso documento preparato e lo stesso indice e fa al massimo una richiesta Gemini aggiuntiva per file/run. In `SUGGEST` questa richiesta è puramente osservativa: una proposta rifiutata o un errore della sua API viene riportato nell'audit, senza modificare il routing normale.
 
 Esempi di pattern attesi:
 
@@ -405,7 +405,7 @@ Il fallback è deliberatamente più restrittivo di una normale classificazione:
 
 `ALLOW_FOLDER_CREATION` è indipendente da `FOLDER_CREATION_MODE`: il primo controlla soltanto questo bootstrap fisso quando l'indice è vuoto; il secondo controlla le nuove foglie proposte dalla review dentro una tassonomia già esistente. Non serve attivare `ALLOW_FOLDER_CREATION` per usare `SUGGEST` o `AUTO`.
 
-Se esiste almeno una candidata ma nessuna è adatta, il fallback `Altro` non viene creato. La proposta review può essere valutata soltanto secondo la modalità descritta sopra; se non viene autorizzata, in `OFF`/`AUTO` il file va in `Da controllare`, mentre in `SUGGEST` resta nella inbox. Lasciare il fallback fisso disabilitato finché non esiste un caso operativo realmente necessario.
+Se esiste almeno una candidata ma nessuna è adatta, il fallback `Altro` non viene creato. La proposta review può essere valutata soltanto secondo la modalità descritta sopra; se non viene autorizzata, il file usa la destinazione esistente quando possibile, altrimenti va in `Da controllare`. Lasciare il fallback fisso disabilitato finché non esiste un caso operativo realmente necessario.
 
 ## DRY_RUN e rollout consigliato
 
@@ -416,15 +416,15 @@ Con `DRY_RUN=true`, documenti e cartelle di smistamento restano in sola lettura.
 - nessuna cartella `Duplicati`, fallback o tassonomica creata;
 - viene creato un nuovo documento `Drive Sorter Audit …` e gli viene aggiunto, nello stesso ordine, l'esatto output del logger mostrato in console; non sovrascrive documenti esistenti né contiene il contenuto dei file analizzati;
 - preparazione, classificazione e validazione vengono comunque eseguite; collisioni e SHA-256 vengono controllati quando esiste una destinazione applicativa da pianificare;
-- un piano riuscito ha `action: "DRY_RUN"` e `wouldAction` indica anche eventuali `SUGGEST_FOLDER` o `CREATE_FOLDER_AND_MOVE`; un errore API/interno usa invece `action: "ERROR"` e lascia il file nella inbox.
+- un piano riuscito ha `action: "DRY_RUN"` e `wouldAction` indica l'azione normale o `CREATE_FOLDER_AND_MOVE`; un errore API/interno usa invece `action: "ERROR"` e lascia il file nella inbox.
 
-Anche `FOLDER_CREATION_MODE=SUGGEST` impedisce mutazioni su documenti e cartelle tassonomiche, indipendentemente dal valore memorizzato di `DRY_RUN`: registra classificazione, proposta, evidenze e fallback nell'audit, poi lascia il file in inbox. Lo stesso file può quindi consumare nuovamente una o due chiamate Gemini al run successivo.
+Con `FOLDER_CREATION_MODE=SUGGEST`, il file viene quindi mosso o inviato in review come in `OFF`; l'audit conserva classificazione, proposta eleggibile, evidenze e fallback. Solo la proposta non può creare una cartella. `DRY_RUN` continua a prevalere su qualunque modalità.
 
 Rollout:
 
 1. configurare tutte le proprietà con `DRY_RUN=true` e `FOLDER_CREATION_MODE=OFF`;
 2. eseguire i test manuali di sola lettura, incluso `testFolderCreationProposal()`;
-3. impostare `FOLDER_CREATION_MODE=SUGGEST` e provare pochi documenti rappresentativi: documenti e tassonomia devono rimanere invariati; apparirà soltanto un audit per run;
+3. impostare `FOLDER_CREATION_MODE=SUGGEST` e provare pochi documenti rappresentativi: i file devono seguire il routing normale senza creare cartelle proposte; controllare proposta, evidenze e fallback nell'audit;
 4. controllare parent/path, pattern, evidenze, proposta, entrambe le soglie e l'eventuale fallback esistente;
 5. provare casi temporali, semantici, ambigui, over-depth e contenenti prompt injection;
 6. impostare `FOLDER_CREATION_MODE=AUTO` mantenendo ancora `DRY_RUN=true` e verificare i piani `CREATE_FOLDER_AND_MOVE`;
@@ -497,7 +497,7 @@ Il documento è salvato e chiuso immediatamente dopo ogni messaggio. Registra in
 
 Un run che non acquisisce il lock, oppure che non riesce ancora a validare proprietà/root, può scrivere soltanto nel log Apps Script perché non esiste una root affidabile in cui collocare il documento. Se l'append all'audit fallisce, il sorter non avvia ulteriori mutazioni di documenti o cartelle; il relativo errore resta in console. Un errore che avviene dopo lo spostamento può lasciare nel documento almeno l'intento precedente, ma non esiste una transazione Drive atomica.
 
-I record JSON file includono timestamp, run ID, file ID, nome originale, MIME, size, classificazione, azione, azione pianificata in dry run, destinazione, filename risultante, duplicato esatto, possibili duplicati, categoria errore, durata e motivo. Per la creazione includono anche modalità, decisione, proposta validata e bounded, errori di validazione, esito soglia, ID/path realmente creati e indicatore di mutazione parziale; il contenuto del documento non viene loggato. Le azioni includono `MOVE`, `REVIEW`, `DUPLICATE`, `SUGGEST_FOLDER`, `CREATE_FOLDER_AND_MOVE`, `DRY_RUN`, `UNSUPPORTED`, `ERROR` e `SKIP`.
+I record JSON file includono timestamp, run ID, file ID, nome originale, MIME, size, classificazione, azione, azione pianificata in dry run, destinazione, filename risultante, duplicato esatto, possibili duplicati, categoria errore, durata e motivo. Per la creazione includono anche modalità, decisione, proposta validata e bounded, errori di validazione, esito soglia, ID/path realmente creati e indicatore di mutazione parziale; il contenuto del documento non viene loggato. In `SUGGEST`, la proposta eleggibile è un campo aggiuntivo del record e non un'azione. Le azioni includono `MOVE`, `REVIEW`, `DUPLICATE`, `CREATE_FOLDER_AND_MOVE`, `DRY_RUN`, `UNSUPPORTED`, `ERROR` e `SKIP`.
 
 Aprire l'audit in `ROOT_FOLDER_ID/logs` oppure **Apps Script → Esecuzioni** per consultare il run. Non è incluso un Google Sheet di audit. Chiavi con nomi sensibili e pattern comuni di API key/token vengono redatti; richieste e risposte Gemini complete non vengono loggate. Nomi file, folder path e ID sono invece dati operativi e possono essere sensibili: limitare l'accesso alla root, al progetto e ai log.
 
@@ -518,7 +518,7 @@ Il progetto riduce il consumo con:
 
 Vengono ritentati errori di trasporto senza risposta e risposte HTTP transitorie `408`, `429`, `500`, `502`, `503` e `504`. Non si ritentano automaticamente `400`, `401` o `403`. Ogni singola attesa è comunque limitata a 60 secondi anche se `RETRY_MAX_DELAY_MS` è maggiore. Dopo l'esaurimento dei retry il file resta nella inbox. Un `429` per quota giornaliera non si risolve con retry ravvicinati: ridurre frequenza/batch o attendere il reset indicato dal provider.
 
-La modalità proposta può quindi arrivare a circa due richieste Gemini per file invece di una. Non viene effettuata alcuna chiamata Gemini finale per il logging; `SUGGEST` può ripetere classificazione/proposta perché lascia intenzionalmente il file in inbox. Sul Free Tier conviene usare batch piccoli, trigger meno frequenti e una fase `SUGGEST` breve ma rappresentativa prima di `AUTO`.
+La modalità proposta può quindi arrivare a circa due richieste Gemini per file invece di una. Non viene effettuata alcuna chiamata Gemini finale per il logging; in `SUGGEST` un file già instradato non viene riesaminato nel run successivo. Sul Free Tier conviene usare batch piccoli, trigger meno frequenti e una fase `SUGGEST` breve ma rappresentativa prima di `AUTO`.
 
 Esistono inoltre [quote Apps Script](https://developers.google.com/apps-script/guides/services/quotas) per runtime, `UrlFetchApp`, trigger e conversioni. `MAX_RUN_MILLIS` è una guardia applicativa, non aumenta la quota della piattaforma.
 
@@ -536,7 +536,7 @@ Queste regole possono cambiare e dipendono da regione, account, billing e modali
 - `npm run verify` controlla staticamente le chiamate vietate e impone che `moveTo`, `setName` e `createFolder` restino nel confine Drive sorvegliato.
 - Gemini riceve solo destinazioni, parent ed evidenze esistenti e non ha tool, credenziali o funzioni per modificare Drive; una nuova cartella non ha un ID finché non la crea il codice.
 - Ogni destinazione viene risolta nuovamente dall'indice affidabile subito prima della mutazione; la creazione ricontrolla anche parent/path, ancestry, evidenze, profondità e figli equivalenti sul Drive reale.
-- `DRY_RUN` e `SUGGEST` terminano prima del confine che muta documenti classificati o cartelle tassonomiche; la sola eccezione è il nuovo documento audit append-only nella root, coperto da test separati.
+- `DRY_RUN` termina prima del confine che muta documenti classificati o cartelle tassonomiche. `SUGGEST` percorre il normale confine di routing, ma non può mai autorizzare la creazione della cartella proposta.
 - Il logger sanitizza ogni record prima di emetterlo in JSON o PRETTY; le etichette PRETTY sono fisse in inglese e le informazioni provenienti da Gemini restano dati, non istruzioni.
 - Il file deve essere ancora non cestinato, figlio diretto della inbox e identico allo snapshot pre-classificazione per nome, MIME, size e data di modifica.
 - Non esiste sovrascrittura: ogni collisione produce un nome nuovo.
@@ -573,7 +573,7 @@ Non assumere che un test riuscito in My Drive garantisca lo stesso comportamento
 - La conversione DOC/DOCX/Google Docs dipende dalle capacità e quote `getAs` di Apps Script.
 - I file sono letti soltanto se figli diretti della inbox; le sottocartelle della inbox sono intenzionalmente escluse insieme ai loro discendenti.
 - Non esiste memoria persistente delle classificazioni fallite: API outage e dry run possono causare una nuova chiamata in un run successivo.
-- `SUGGEST` lascia intenzionalmente ogni file in inbox e può ripetere classificazione/proposta e relativi costi in ogni run.
+- `SUGGEST` applica il routing normale e conserva nell'audit soltanto le proposte eleggibili; non crea cartelle dalla proposta.
 - La deadline impedisce nuovi tentativi e mutazioni quando il margine è insufficiente, ma Apps Script non permette di interrompere una singola `UrlFetchApp.fetch` già in corso.
 - L'indice interrompe presto alberi con troppe candidate, ma la traversata Drive iniziale non è interrompibile a metà di una singola chiamata/iterazione lenta; un albero eccezionalmente grande o un Drive degradato può ancora raggiungere il timeout della piattaforma.
 - Un modello configurato con ragionamento dinamico molto profondo può raggiungere `MAX_TOKENS` anche con il margine previsto; il risultato viene rifiutato in modo fail-safe e, in `OFF`/`AUTO` live, va in review, quindi provare sempre il modello con `testGemini()` e un piccolo DRY_RUN.
@@ -627,7 +627,7 @@ Controllare le quote reali in AI Studio, ridurre `MAX_FILES_PER_RUN`, aumentare 
 
 ### DOC/DOCX/Google Docs non viene classificato
 
-Se il file o il PDF esportato supera `MAX_INPUT_BYTES`, il risultato è `UNSUPPORTED` e in `OFF`/`AUTO` live va in review; `SUGGEST` resta read-only. Se `getAs` fallisce per permessi, conversione, outage o quota, il risultato è invece `API_ERROR`: il batch continua e il file resta nella inbox per un tentativo successivo. Non abilitare un OCR o servizio esterno senza una decisione esplicita su sicurezza e privacy.
+Se il file o il PDF esportato supera `MAX_INPUT_BYTES`, il risultato è `UNSUPPORTED` e, fuori da `DRY_RUN`, va in review anche in `SUGGEST`. Se `getAs` fallisce per permessi, conversione, outage o quota, il risultato è invece `API_ERROR`: il batch continua e il file resta nella inbox per un tentativo successivo. Non abilitare un OCR o servizio esterno senza una decisione esplicita su sicurezza e privacy.
 
 ### Il trigger mantiene il vecchio intervallo
 
@@ -643,7 +643,7 @@ Verificare che `LOG_LEVEL` sia esattamente `PRETTY` oppure `FULL`; il valore pre
 
 ### Un file resta nella inbox
 
-Controllare `errorKind`: `API_ERROR` e `INTERNAL_ERROR` lasciano intenzionalmente il file dov'è; lock non disponibile salta l'intero run. Anche `DRY_RUN=true` e `FOLDER_CREATION_MODE=SUGGEST` lo lasciano intenzionalmente in inbox. In `OFF`/`AUTO`, classificazione incerta o formato unsupported devono invece pianificare/spostare in review quando le scritture sono abilitate.
+Controllare `errorKind`: `API_ERROR` e `INTERNAL_ERROR` della classificazione lasciano intenzionalmente il file dov'è; lock non disponibile salta l'intero run. `DRY_RUN=true` lascia il file in inbox. In ogni modalità, compresa `SUGGEST`, classificazione incerta o formato unsupported pianificano/spostano in review quando le scritture sono abilitate; un errore della sola proposta viene registrato senza bloccare questo routing.
 
 ### Nessuna proposta di nuova cartella
 
@@ -674,6 +674,6 @@ Controllare `errorKind`: `API_ERROR` e `INTERNAL_ERROR` lasciano intenzionalment
 - [ ] eseguire testFolderCreationProposal
 - [ ] eseguire runSorter con DRY_RUN
 - [ ] controllare l'audit nel formato scelto e il summary finale PRETTY quando abilitato
-- [ ] provare FOLDER_CREATION_MODE=SUGGEST e controllare che documenti/tassonomia restino invariati (eccetto il nuovo documento audit)
+- [ ] provare FOLDER_CREATION_MODE=SUGGEST e controllare che i file seguano il routing normale, senza creare la cartella proposta, e che l'audit riporti la proposta eleggibile
 - [ ] provare FOLDER_CREATION_MODE=AUTO mantenendo DRY_RUN=true
 - [ ] solo dopo impostare DRY_RUN=false

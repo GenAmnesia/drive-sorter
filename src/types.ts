@@ -263,7 +263,6 @@ type LogAction =
   | "MOVE"
   | "REVIEW"
   | "DUPLICATE"
-  | "SUGGEST_FOLDER"
   | "CREATE_FOLDER_AND_MOVE"
   | "DRY_RUN"
   | "UNSUPPORTED"

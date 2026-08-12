@@ -94,7 +94,7 @@ application code remains the sole authority that validates and creates folders.
 - [x] Add `FOLDER_CREATION_MIN_SIBLING_EVIDENCE=2` so an autonomous proposal must cite a real, repeatable sibling pattern.
 - [x] Add and validate `FOLDER_CREATION_SEMANTIC_GROUPS_JSON` as an explicit bounded name-family allowlist for `SEMANTIC` AUTO proposals; keep `[["IMU","TARI","TASI"]]` as the documented default and let `[]` disable semantic AUTO authorization.
 - [x] Keep the existing `ALLOW_FOLDER_CREATION` root fallback behavior separate and document its relationship with the new review-driven mode.
-- [x] Extend action-plan, result, log, and batch-summary types for `SUGGEST_FOLDER` and `CREATE_FOLDER_AND_MOVE` without weakening existing `MOVE`, `REVIEW`, or `DUPLICATE` behavior.
+- [x] Extend action-plan, result, log, and batch-summary types for eligible suggestion metadata and `CREATE_FOLDER_AND_MOVE` without weakening existing `MOVE`, `REVIEW`, or `DUPLICATE` behavior.
 
 ### 8.2 Trusted topology and pattern evidence
 
@@ -122,17 +122,17 @@ application code remains the sole authority that validates and creates folders.
 - [x] Validate that every evidence ID exists, is non-reserved, shares the proposed parent, and meets `FOLDER_CREATION_MIN_SIBLING_EVIDENCE` after deduplication.
 - [x] Sanitize each proposed segment and reject blank names, control characters, slashes, dot segments, reserved names, IDs/URLs, and names exceeding Drive/config limits.
 - [x] Enforce both maximum new segments and maximum final depth in application code, independently of Gemini confidence.
-- [x] Reject proposals below `FOLDER_CREATION_CONFIDENCE_THRESHOLD`; in `SUGGEST` mode do not modify classified documents or taxonomy, log the proposal/decision, and leave the document in inbox for manual review.
+- [x] Reject proposals below `FOLDER_CREATION_CONFIDENCE_THRESHOLD`; in `SUGGEST` mode log only eligible proposals while retaining the same document routing as `OFF`.
 - [x] If an equivalent child already exists case-insensitively, do not create another folder; leave the file for a fresh classification against the updated tree or safely reuse it only after full destination/duplicate validation.
 - [x] Validate temporal proposals deterministically against cited year siblings; treat semantic sibling proposals as higher-risk and require the same or a stricter confidence/evidence policy.
-- [x] In `OFF`/`AUTO`, route invalid, ambiguous, structurally weak, or over-depth proposals to `Da controllare`; in `SUGGEST` or on proposal API/infrastructure errors leave the file in inbox.
+- [x] Route invalid, ambiguous, structurally weak, or over-depth proposals to the normal existing-target/review fallback; in `SUGGEST`, proposal API/infrastructure errors are logged without blocking that fallback.
 
 ### 8.5 Guarded creation and move behavior
 
 - [x] Add a single guarded `CREATE_FOLDER_AND_MOVE` mutation path; Gemini must never call Drive or supply the created folder ID.
 - [x] Immediately before creation, reopen the source by ID, verify its inbox parent and immutable snapshot, and revalidate the parent name/path, ancestry, exclusions, depth, and sibling evidence.
 - [x] Recheck for an equivalent child immediately before `createFolder` to prevent duplicate folders under concurrent/manual changes.
-- [x] In `DRY_RUN` and `SUGGEST` modes perform no creation/move/rename of classified documents or taxonomy; log the exact proposed parent, leaf, final path, confidence, and evidence. The later audit-log phase adds an intentional Google Doc-only exception.
+- [x] In `DRY_RUN` perform no creation/move/rename of classified documents or taxonomy. In `SUGGEST`, perform normal routing but never create a taxonomy folder from a proposal; log the exact eligible proposed parent, leaf, final path, confidence, and evidence.
 - [x] After successful creation, preserve existing collision, optional rename, exact-duplicate, and safe-move guarantees before moving the document.
 - [x] If an external actor creates the same child during the race window, abort safely and retry on a later run rather than merging into an unvalidated destination.
 - [x] Record partial outcomes explicitly when folder creation succeeds but move/rename/post-condition verification fails; never delete the newly created folder or any file.
@@ -144,15 +144,15 @@ application code remains the sole authority that validates and creates folders.
 - [x] Add batch counters for folder proposals, accepted proposals, created folders, rejected proposals, and proposal API errors.
 - [x] Add pure tests for `IMU/{2024,2025} -> IMU/2023` and `Casa/Roma/{IMU,TARI} -> Casa/Roma/TASI`.
 - [x] Add negative tests for invented parents/evidence, same-parent but unrelated siblings, insufficient evidence, reserved names, traversal strings, excess depth/segments, low confidence, existing equivalent folders, prompt injection, and disabled semantic AUTO authorization.
-- [x] Add mutation-boundary tests proving that `DRY_RUN` and `SUGGEST` cannot create/move/rename, that the legacy fallback is also suppressed in live `SUGGEST`, and that source/destination TOCTOU checks still abort safely.
-- [x] Add a read-only Apps Script manual test that prints folder-creation proposals and validation decisions without creating folders or moving files.
+- [x] Add mutation-boundary tests proving that `DRY_RUN` cannot create/move/rename, `SUGGEST` performs normal routing without proposal-driven creation, and source/destination TOCTOU checks still abort safely.
+- [x] Add a manual Apps Script test that prints folder-creation proposals and validation decisions without creating folders or routing inbox files.
 - [x] Update README setup, Script Properties, two-threshold fallback policy, security model, Free Tier cost impact of the optional second Gemini call, rollout, logs, examples, and troubleshooting.
 - [x] Run final typecheck, build, static verification, clasp status, diff/secret/destructive-operation review, and synchronize every checkbox with verified repository state.
 
 ### 8.7 Controlled rollout (owner/manual)
 
 - [ ] Push the verified implementation and add the new Script Properties while keeping `DRY_RUN=true` and `FOLDER_CREATION_MODE=OFF`.
-- [ ] Run the new read-only proposal test, then use `FOLDER_CREATION_MODE=SUGGEST` to review proposal confidence/evidence on representative documents; account for repeated evaluation because files intentionally remain in inbox.
+- [ ] Run the new read-only proposal test, then use `FOLDER_CREATION_MODE=SUGGEST` to review proposal confidence/evidence and normal routing on representative documents.
 - [ ] Exercise temporal, semantic, ambiguous, malicious-name, existing-folder, and over-depth cases and confirm that Drive remains unchanged.
 - [ ] Switch to `FOLDER_CREATION_MODE=AUTO` while still in `DRY_RUN`, and approve the exact planned folder paths from structured logs.
 - [ ] Enable live writes only for a small manual batch after proposal quality is demonstrated; verify created folders, moves, duplicates, collisions, and partial-failure logs before enabling any trigger.
@@ -170,7 +170,7 @@ anything.
 - [x] Initialize the audit document before the batch `STARTED` record and append every sanitized batch/file record immediately with `saveAndClose()`.
 - [x] Write an action-intent audit record before each live document mutation so an interrupted run remains traceable.
 - [x] Fail closed before further document/folder mutations when the persistent audit document cannot be updated; retain console diagnostics without logging secrets.
-- [x] Treat audit-document creation/update as the only explicit Drive-write exception in `DRY_RUN` and `SUGGEST`, while keeping all classified documents and taxonomy folders unchanged.
+- [x] Treat audit-document creation/update as the only explicit Drive-write exception in `DRY_RUN`; `SUGGEST` uses normal document routing but never creates a proposed taxonomy folder.
 - [x] Add the minimum Google Docs OAuth scope, static/mock verification, and a clearly labeled manual audit-log smoke test.
 - [x] Update README safety, scope, rollout, and troubleshooting documentation for the audit exception and required reauthorization.
 - [x] Run typecheck, build, static verification, clasp status, and full diff/secret/destructive-operation review.

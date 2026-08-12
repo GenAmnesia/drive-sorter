@@ -69,6 +69,11 @@ function applyFolderProposalCounters(
     summary.acceptedFolderProposals = 1;
   } else if (
     plan.folderCreationProposalRequestMade &&
+    plan.folderCreationDecision === "API_ERROR"
+  ) {
+    summary.folderProposalApiErrors = 1;
+  } else if (
+    plan.folderCreationProposalRequestMade &&
     (plan.folderCreationDecision === "MODEL_DECLINED" ||
       plan.folderCreationDecision === "REJECTED")
   ) {
@@ -297,6 +302,25 @@ function buildFolderProposalOrFallbackPlan(
   } catch (error: unknown) {
     if (error instanceof SorterError && error.category === "API_ERROR") {
       attemptState.apiError = true;
+      // Suggestions are observational. A proposal API outage must not change
+      // the operational result that OFF mode would have produced.
+      if (config.folderCreationMode === "SUGGEST") {
+        const fallbackPlan = buildFolderProposalFallbackPlan(
+          file,
+          sourceSnapshot,
+          classification,
+          proposalReason,
+          "API_ERROR",
+          null,
+          ["Folder proposal API failure; normal routing continued."],
+          config,
+          context,
+          index,
+          deadlineEpochMs,
+          attemptState.requestMade,
+        );
+        return fallbackPlan;
+      }
     }
     throw error;
   }
@@ -312,9 +336,6 @@ function buildFolderProposalOrFallbackPlan(
     policyErrors,
     attemptState.requestMade,
   );
-  // INVALID may carry a canonical, structurally validated low-confidence
-  // proposal in SUGGEST mode. It is safe for bounded logging only and can
-  // never cross the AUTO authorization branch below.
   const loggedProposal = evaluation.proposal;
   const authorizedProposal =
     evaluation.status === "VALID" ? evaluation.proposal : null;
@@ -325,7 +346,7 @@ function buildFolderProposalOrFallbackPlan(
       : `${authorizedProposal.parentFolderPath}/${authorizedProposal.proposedSegments.join("/")}`;
 
   if (
-    (decision === "AUTO_APPROVED" || decision === "SUGGESTED") &&
+    decision === "AUTO_APPROVED" &&
     authorizedProposal !== null &&
     finalPath !== null
   ) {
@@ -359,6 +380,41 @@ function buildFolderProposalOrFallbackPlan(
     };
   }
 
+  return buildFolderProposalFallbackPlan(
+    file,
+    sourceSnapshot,
+    classification,
+    proposalReason,
+    decision,
+    loggedProposal,
+    proposalErrors,
+    config,
+    context,
+    index,
+    deadlineEpochMs,
+    attemptState.requestMade,
+  );
+}
+
+/**
+ * Apply the same destination decision as OFF mode while retaining optional
+ * proposal metadata for audit/output. This is also used when SUGGEST cannot
+ * obtain a proposal, so an auxiliary request can never block file routing.
+ */
+function buildFolderProposalFallbackPlan(
+  file: GoogleAppsScript.Drive.File,
+  sourceSnapshot: SourceFileSnapshot,
+  classification: ClassificationResult,
+  proposalReason: string,
+  decision: FolderCreationDecision,
+  loggedProposal: FolderCreationProposal | null,
+  proposalErrors: readonly string[],
+  config: AppConfig,
+  context: DriveFolderContext,
+  index: FolderIndex,
+  deadlineEpochMs: number,
+  requestMade: boolean,
+): FileActionPlan {
   const fallbackReason = buildFolderProposalPlanReason(
     proposalReason,
     decision,
@@ -392,8 +448,8 @@ function buildFolderProposalOrFallbackPlan(
     ...fallbackPlan,
     folderCreationProposal: loggedProposal,
     folderCreationDecision: decision,
-    folderCreationProposalErrors: proposalErrors,
-    folderCreationProposalRequestMade: attemptState.requestMade,
+    folderCreationProposalErrors: proposalErrors.slice(),
+    folderCreationProposalRequestMade: requestMade,
     reason: hasUsableExistingTarget
       ? `${fallbackPlan.reason} Folder proposal fallback: ${fallbackReason}`
       : fallbackPlan.reason,
@@ -764,45 +820,6 @@ function executeAndLogFilePlan(
   const summary = summarizePlan(plan);
   const originalFilename = file.getName();
   const originalMimeType = file.getMimeType();
-
-  // SUGGEST is an unconditional read-only boundary, independently of DRY_RUN
-  // and independently of whether the normal classifier found a usable target.
-  // The file remains in inbox and the selected fallback/proposal is log-only.
-  if (config.folderCreationMode === "SUGGEST") {
-    const suggestSummary = emptyFileProcessingSummary();
-    suggestSummary.processed = 1;
-    suggestSummary.skipped = 1;
-    applyFolderProposalCounters(suggestSummary, plan);
-    logOperation(
-      createStructuredLogRecord({
-        runId,
-        fileId: file.getId(),
-        originalFilename,
-        mimeType: originalMimeType,
-        sizeBytes,
-        classification: plan.classification,
-        action: config.dryRun ? "DRY_RUN" : "SUGGEST_FOLDER",
-        wouldAction: plan.action,
-        destinationFolderId: plan.requiresFolderCreation
-          ? null
-          : plan.destinationFolderId,
-        destinationPath: plan.destinationPath,
-        resultingFilename: plan.destinationFilename,
-        duplicateOfFileId: plan.duplicateOfFileId,
-        possibleDuplicateOfFileIds: plan.possibleDuplicateOfFileIds,
-        errorKind: plan.errorKind,
-        error:
-          sourceError === null || plan.errorKind === null
-            ? null
-            : toStructuredLogError(sourceError, plan.errorKind, false),
-        dryRun: config.dryRun,
-        durationMs: Date.now() - startedAt,
-        reason: `${plan.reason} SUGGEST is read-only; file left in inbox.`,
-        ...buildFolderCreationLogFields(plan, config),
-      }),
-    );
-    return suggestSummary;
-  }
 
   if (config.dryRun) {
     logOperation(

@@ -74,8 +74,7 @@ function runSorter(): void {
     if (index.folders.length === 0 && inboxHasFiles) {
       if (
         config.allowFolderCreation &&
-        !config.dryRun &&
-        config.folderCreationMode !== "SUGGEST"
+        !config.dryRun
       ) {
         logPersistentAuditIntent({
           timestamp: isoTimestamp(),
@@ -145,11 +144,12 @@ function runSorter(): void {
           `fallbackCreated=${fallbackCreated}`,
           `deadlineGuardReached=${deadlineReached}`,
           `indexComplete=${index.isComplete}`,
+          config.dryRun
+            ? "countsArePlannedActions=true"
+            : "countsAreAppliedActions=true",
           config.folderCreationMode === "SUGGEST"
-            ? "countsAreReadOnlySuggestions=true"
-            : config.dryRun
-              ? "countsArePlannedActions=true"
-              : "countsAreAppliedActions=true",
+            ? "folderProposalsAreSuggestions=true"
+            : "folderProposalsAreSuggestions=false",
         ].join("; "),
       }),
     );

@@ -119,27 +119,6 @@ function evaluateFolderCreationProposal(
     config,
   );
   if (!validation.valid) {
-    // SUGGEST is intentionally read-only. Preserve a bounded, fully
-    // topology/name/evidence-validated proposal for audit even when the only
-    // failed policy is confidence. Never retain the raw model object.
-    if (config.folderCreationMode === "SUGGEST") {
-      const structuralValidation = validateFolderCreationProposal(
-        proposal,
-        contexts,
-        index,
-        {
-          ...config,
-          folderCreationConfidenceThreshold: 0,
-        },
-      );
-      if (structuralValidation.valid) {
-        return folderProposalEvaluation(
-          "INVALID",
-          structuralValidation.value.proposal,
-          validation.errors,
-        );
-      }
-    }
     return folderProposalEvaluation(
       "INVALID",
       null,
