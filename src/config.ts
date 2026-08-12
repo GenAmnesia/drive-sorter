@@ -18,7 +18,7 @@ const CONFIG_DEFAULTS = Object.freeze({
   allowFolderCreation: false,
   fallbackFolderName: "Altro",
   folderCreationMode: "AUTO" as FolderCreationMode,
-  folderCreationConfidenceThreshold: 0.7,
+  folderCreationConfidenceThreshold: 0.97,
   folderCreationMaxFinalDepth: 10,
   folderCreationMaxNewSegments: 1,
   folderCreationMinSiblingEvidence: 2,
@@ -261,7 +261,8 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     allowFolderCreation,
     problems,
   );
-  folderCreationMode = readConfigValue(
+  if (scope === "FULL") {
+    folderCreationMode = readConfigValue(
     () =>
       parseFolderCreationMode(
         properties.FOLDER_CREATION_MODE,
@@ -270,7 +271,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     folderCreationMode,
     problems,
   );
-  folderCreationConfidenceThreshold = readConfigValue(
+    folderCreationConfidenceThreshold = readConfigValue(
     () =>
       parseFloatNumber(
         properties.FOLDER_CREATION_CONFIDENCE_THRESHOLD,
@@ -282,7 +283,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     folderCreationConfidenceThreshold,
     problems,
   );
-  folderCreationMaxFinalDepth = readConfigValue(
+    folderCreationMaxFinalDepth = readConfigValue(
     () =>
       parseInteger(
         properties.FOLDER_CREATION_MAX_FINAL_DEPTH,
@@ -294,7 +295,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     maxFolderDepth,
     problems,
   );
-  folderCreationMaxNewSegments = readConfigValue(
+    folderCreationMaxNewSegments = readConfigValue(
     () =>
       parseInteger(
         properties.FOLDER_CREATION_MAX_NEW_SEGMENTS,
@@ -306,7 +307,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     folderCreationMaxNewSegments,
     problems,
   );
-  folderCreationMinSiblingEvidence = readConfigValue(
+    folderCreationMinSiblingEvidence = readConfigValue(
     () =>
       parseInteger(
         properties.FOLDER_CREATION_MIN_SIBLING_EVIDENCE,
@@ -317,7 +318,8 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
       ),
     folderCreationMinSiblingEvidence,
     problems,
-  );
+    );
+  }
 
   const configuredDuplicateFolderName = readOptionalNameProperty(
     properties,
@@ -348,7 +350,8 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     logFolderName = configuredLogFolderName;
   }
 
-  folderCreationSemanticGroups = readConfigValue(
+  if (scope === "FULL") {
+    folderCreationSemanticGroups = readConfigValue(
     () =>
       parseFolderCreationSemanticGroups(
         properties.FOLDER_CREATION_SEMANTIC_GROUPS_JSON,
@@ -359,7 +362,8 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
       ),
     folderCreationSemanticGroups,
     problems,
-  );
+    );
+  }
 
   excludedFolderIds = parseCsvStrings(properties.EXCLUDED_FOLDER_IDS);
   excludedFolderIds.forEach((folderId) => {
@@ -401,31 +405,32 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
       "RETRY_MAX_DELAY_MS must be greater than or equal to RETRY_BASE_DELAY_MS.",
     );
   }
-  if (folderCreationMaxFinalDepth > maxFolderDepth) {
+  if (scope === "FULL" && folderCreationMaxFinalDepth > maxFolderDepth) {
     problems.push(
       "FOLDER_CREATION_MAX_FINAL_DEPTH must be less than or equal to MAX_FOLDER_DEPTH.",
     );
   }
   if (
+    scope === "FULL" &&
     folderCreationMode !== "OFF" &&
     folderCreationConfidenceThreshold < confidenceThreshold
   ) {
     problems.push(
-      "FOLDER_CREATION_CONFIDENCE_THRESHOLD must be greater than or equal to CONFIDENCE_THRESHOLD when folder proposals are enabled.",
+      `FOLDER_CREATION_CONFIDENCE_THRESHOLD=${folderCreationConfidenceThreshold} must be greater than or equal to CONFIDENCE_THRESHOLD=${confidenceThreshold} when folder proposals are enabled.`,
     );
   }
-  if (folderCreationMaxNewSegments > folderCreationMaxFinalDepth) {
+  if (scope === "FULL" && folderCreationMaxNewSegments > folderCreationMaxFinalDepth) {
     problems.push(
       "FOLDER_CREATION_MAX_NEW_SEGMENTS must be less than or equal to FOLDER_CREATION_MAX_FINAL_DEPTH.",
     );
   }
-  if (folderCreationMode !== "OFF" && folderCreationMaxFinalDepth < 2) {
+  if (scope === "FULL" && folderCreationMode !== "OFF" && folderCreationMaxFinalDepth < 2) {
     problems.push(
       "FOLDER_CREATION_MAX_FINAL_DEPTH must be at least 2 when FOLDER_CREATION_MODE is enabled because the root cannot be a creation parent.",
     );
   }
   if (
-    folderCreationMode !== "OFF" &&
+    scope === "FULL" && folderCreationMode !== "OFF" &&
     folderCreationMinSiblingEvidence > maxCandidateFolders
   ) {
     problems.push(
@@ -433,7 +438,7 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
     );
   }
   if (
-    folderCreationMode !== "OFF" &&
+    scope === "FULL" && folderCreationMode !== "OFF" &&
     folderCreationSemanticGroups.some(
       (group) => group.length < folderCreationMinSiblingEvidence + 1,
     )
@@ -463,12 +468,14 @@ function getAppConfig(scope: ConfigScope = "FULL"): AppConfig {
       "DUPLICATE_FOLDER_NAME and FALLBACK_FOLDER_NAME must be different.",
     );
   }
-  if (
-    [...reservedOperationalNames, "duplicati", "logs", normalizedDuplicateName, normalizedFallbackName].includes(normalizedLogName)
-  ) {
-    problems.push(
-      "LOG_FOLDER_NAME cannot use an inbox/review/Duplicati/fallback reserved name.",
-    );
+  const logFolderConflict = getLogFolderNameConflictMessage(
+    normalizedLogName,
+    normalizedDuplicateName,
+    normalizedFallbackName,
+    reservedOperationalNames,
+  );
+  if (logFolderConflict !== null) {
+    problems.push(logFolderConflict);
   }
 
   if (problems.length > 0) {
@@ -663,6 +670,28 @@ function isSafeFolderName(value: string): boolean {
     value !== ".." &&
     !/[\\/\u0000-\u001F\u007F]/.test(value)
   );
+}
+
+/** Return a precise, non-secret remediation for configuration-only conflicts. */
+function getLogFolderNameConflictMessage(
+  normalizedLogName: string,
+  normalizedDuplicateName: string,
+  normalizedFallbackName: string,
+  reservedOperationalNames: readonly string[],
+): string | null {
+  if (reservedOperationalNames.includes(normalizedLogName)) {
+    return `LOG_FOLDER_NAME=${normalizedLogName} conflicts with a reserved inbox/review name; use logs.`;
+  }
+  if (normalizedLogName === "duplicati") {
+    return "LOG_FOLDER_NAME=Duplicati conflicts with the duplicate-folder name; use logs.";
+  }
+  if (normalizedLogName === normalizedDuplicateName) {
+    return `LOG_FOLDER_NAME=${normalizedLogName} conflicts with DUPLICATE_FOLDER_NAME=${normalizedDuplicateName}; use logs or change the duplicate-folder name.`;
+  }
+  if (normalizedLogName === normalizedFallbackName) {
+    return `LOG_FOLDER_NAME=${normalizedLogName} conflicts with FALLBACK_FOLDER_NAME=${normalizedFallbackName}; keep LOG_FOLDER_NAME=logs and set FALLBACK_FOLDER_NAME to a different safe name such as Altro.`;
+  }
+  return null;
 }
 
 function parseFolderCreationMode(

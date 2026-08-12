@@ -235,3 +235,43 @@ into a separate Google Doc; Gemini never supplies Drive commands or markup.
 ### 13.1 Owner/manual verification
 
 - [ ] Push the change and run `DRY_RUN` with a document clearly identified as 2024 and both `/2023` and `/2024` candidates; confirm the raw audit does not propose the mismatched-year folder.
+
+## 14. Log-folder configuration diagnostics (new active scope)
+
+- [x] Make `LOG_FOLDER_NAME` conflicts identify the exact conflicting Script Property and a safe remediation without writing user properties.
+- [x] Add regression coverage and run local verification; leave the owner responsible for correcting existing Script Properties.
+
+## 15. Scope-aware configuration validation (new active scope)
+
+- [x] Keep non-secret values in `config.ts` as defaults while documenting that same-named Script Properties are explicit overrides.
+- [x] Prevent `DRIVE`-only manual tests from parsing or rejecting folder-proposal settings that they do not use.
+- [x] Retain full validation for `runSorter` and proposal tests, with an error that states the effective conflicting threshold values.
+- [x] Add regression checks and run typecheck/build/status/diff verification.
+
+## 16. Drive-folder name conflict diagnostics (new active scope)
+
+- [x] Identify the exact `DUPLICATE_FOLDER_NAME`, `FALLBACK_FOLDER_NAME`, or `LOG_FOLDER_NAME` conflict with the actual inbox/review folder name and ID.
+- [x] Add a pure regression check and rerun local verification without modifying Script Properties.
+
+## 17. Gemini folder-proposal schema compatibility (new active scope)
+
+- [x] Replace the nullable nested proposal schema with explicit supported JSON-Schema branches while preserving `proposal: null` or validated proposal-object semantics.
+- [x] Add request-schema regression coverage and document the safe retry path for the Apps Script proposal test.
+- [x] Run local verification and clasp status; leave the live Gemini request as owner/manual verification.
+
+## 18. Folder-proposal HTTP 400 diagnostics (new active scope)
+
+- [x] Attach a bounded, non-secret proposal-request profile to generic HTTP 400 errors without logging document content, raw prompts, blobs, or API keys.
+- [x] Emit the same profile before the manual proposal test invokes Gemini, so an API rejection remains diagnosable in Apps Script executions.
+- [x] Add static coverage and run local verification/status/diff checks.
+
+## 19. Flat Gemini folder-proposal wire schema (new active scope)
+
+- [x] Replace the nested conditional/null proposal schema with one flat, always-present proposal object and a `NONE|PROPOSE` decision discriminator.
+- [x] Convert a strictly neutral `NONE` wire object to the existing internal `proposal=null` result; keep full trusted-index validation for `PROPOSE`.
+- [x] Remove dynamic ID enums and conditional branches from the provider schema while retaining all ID membership enforcement at runtime.
+- [x] Update prompt, diagnostics, regression tests, and documentation; run typecheck/build/status/diff verification.
+
+### 19.1 Owner/manual verification
+
+- [ ] Push and rerun `testFolderCreationProposal()` with the same PDF; confirm the API accepts the flat schema and the test returns `NO_PROPOSAL`, `VALID`, or a bounded validation decision instead of HTTP 400.

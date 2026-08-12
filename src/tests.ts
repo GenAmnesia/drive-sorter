@@ -247,6 +247,25 @@ function testFolderCreationProposal(): void {
 
   const file = files.next();
   const prepared = prepareDocument(file, testConfig);
+  const proposalRequest = buildGeminiFolderProposalRequest(
+    prepared,
+    creationContexts,
+    testConfig,
+  );
+  console.log(
+    safeJsonStringify({
+      timestamp: isoTimestamp(),
+      event: "TEST_FOLDER_PROPOSAL_REQUEST_PROFILE",
+      ...getFolderProposalRequestDiagnostics(
+        proposalRequest,
+        prepared,
+        creationContexts,
+        testConfig,
+      ),
+      readOnly: true,
+      driveModified: false,
+    }),
+  );
   const evaluation = evaluateFolderCreationProposal(
     prepared,
     index,

@@ -153,6 +153,52 @@ assert.throws(() =>
 );
 
 assert.equal(
+  evaluate("getLogFolderNameConflictMessage('logs', 'duplicati', 'altro', ['da smistare', 'da controllare'])"),
+  null,
+  "The default LOG_FOLDER_NAME=logs must be valid.",
+);
+assert.match(
+  evaluate("getLogFolderNameConflictMessage('logs', 'duplicati', 'logs', ['da smistare', 'da controllare'])"),
+  /FALLBACK_FOLDER_NAME=logs/,
+  "A legacy fallback/log collision must name the exact property and value.",
+);
+evaluate(`
+  globalThis.__scopeProperties = {
+    ROOT_FOLDER_ID: 'root_1234567890',
+    INBOX_FOLDER_ID: 'inbox_1234567890',
+    REVIEW_FOLDER_ID: 'review_1234567890',
+    GEMINI_API_KEY: 'test-key-1234567890',
+    GEMINI_MODEL: 'gemini-3.5-flash-lite',
+    CONFIDENCE_THRESHOLD: '0.85',
+    FOLDER_CREATION_CONFIDENCE_THRESHOLD: '0.70',
+    FOLDER_CREATION_MODE: 'AUTO'
+  };
+  globalThis.PropertiesService = {
+    getScriptProperties: function () {
+      return { getProperties: function () { return globalThis.__scopeProperties; } };
+    }
+  };
+  globalThis.__driveScopeConfig = getAppConfig('DRIVE');
+  try { getAppConfig('FULL'); } catch (error) { globalThis.__fullScopeError = error.message; }
+`);
+assert.equal(evaluate("__driveScopeConfig.confidenceThreshold"), 0.85);
+assert.match(
+  evaluate("__fullScopeError"),
+  /FOLDER_CREATION_CONFIDENCE_THRESHOLD=0.7.*CONFIDENCE_THRESHOLD=0.85/,
+  "Only FULL configuration must reject the proposal threshold conflict with effective values.",
+);
+assert.throws(
+  () =>
+    evaluate(`assertOperationalFolderNamesAreDistinct(
+      {duplicateFolderName:'Duplicati', fallbackFolderName:'Altro', logFolderName:'logs'},
+      {getId:function(){return 'inbox_1234567890';},getName:function(){return 'logs';}},
+      {getId:function(){return 'review_1234567890';},getName:function(){return 'Da controllare';}}
+    )`),
+  /LOG_FOLDER_NAME=logs.*INBOX_FOLDER_ID.*folderId=inbox_1234567890/,
+  "A Drive-name collision must identify the configured property and actual folder.",
+);
+
+assert.equal(
   evaluate(
     "generateNonConflictingFilenameFromNames('documento.pdf', ['documento.pdf', 'documento (2).pdf'])",
   ),
@@ -593,10 +639,77 @@ assert.equal(
   folderProposalRequest.generationConfig.responseFormat.text.mimeType,
   "APPLICATION_JSON",
 );
-assert.deepEqual(
+const proposalSchema =
   folderProposalRequest.generationConfig.responseFormat.text.schema.properties
-    .proposal.properties.parentFolderId.enum.sort(),
-  folderProposalContexts.map((contextValue) => contextValue.parentFolderId).sort(),
+    .proposal;
+assert.equal(proposalSchema.type, "object");
+assert.equal(
+  Object.hasOwn(proposalSchema, "anyOf"),
+  false,
+  "The provider proposal schema must not contain conditional branches.",
+);
+assert.deepEqual(proposalSchema.properties.decision.enum, ["NONE", "PROPOSE"]);
+assert.equal(proposalSchema.properties.proposedSegments.minItems, 0);
+assert.equal(proposalSchema.properties.evidenceFolderIds.minItems, 0);
+assert.equal(
+  Object.hasOwn(proposalSchema.properties.parentFolderId, "enum"),
+  false,
+  "Trusted parent membership belongs to runtime validation, not a dynamic provider enum.",
+);
+assert.equal(
+  Object.hasOwn(proposalSchema.properties.evidenceFolderIds.items, "enum"),
+  false,
+  "Trusted evidence membership belongs to runtime validation, not a dynamic provider enum.",
+);
+
+const neutralFolderProposalEnvelope = JSON.parse(
+  evaluate(`JSON.stringify(validateFolderCreationModelEnvelope({proposal:{
+    decision:'NONE',parentFolderId:'',parentFolderPath:'',proposedSegments:[],
+    patternType:'NONE',evidenceFolderIds:[],confidence:0,
+    reason:'No sufficiently strong missing-folder pattern.'
+  }}))`),
+);
+assert.equal(neutralFolderProposalEnvelope.valid, true);
+assert.equal(neutralFolderProposalEnvelope.proposal, null);
+
+const nonNeutralNoneEnvelope = JSON.parse(
+  evaluate(`JSON.stringify(validateFolderCreationModelEnvelope({proposal:{
+    decision:'NONE',parentFolderId:'parent-imu',parentFolderPath:'Casa/IMU',
+    proposedSegments:[],patternType:'NONE',evidenceFolderIds:[],confidence:0,
+    reason:'No proposal.'
+  }}))`),
+);
+assert.equal(
+  nonNeutralNoneEnvelope.valid,
+  false,
+  "NONE must not smuggle parent, path, evidence, segments, pattern, or confidence values.",
+);
+
+const proposedFolderWireEnvelope = JSON.parse(
+  evaluate(`JSON.stringify(validateFolderCreationModelEnvelope({proposal:${JSON.stringify({
+    decision: "PROPOSE",
+    ...semanticFolderProposal,
+  })}}))`),
+);
+assert.equal(proposedFolderWireEnvelope.valid, true);
+assert.deepEqual(proposedFolderWireEnvelope.proposal, semanticFolderProposal);
+const folderProposalDiagnostics = JSON.parse(
+  evaluate(
+    `JSON.stringify(getFolderProposalRequestDiagnostics(${JSON.stringify(folderProposalRequest)}, {
+      fileId:'file',filename:'ignore.pdf',mimeType:'text/plain',sizeBytes:80,
+      kind:'TEXT',parts:[{text:${JSON.stringify(injectionText)}}],
+      extractedText:${JSON.stringify(injectionText)},truncated:false,unsupportedReason:null
+    }, ${JSON.stringify(folderProposalContexts)}, __folderProposalConfig))`,
+  ),
+);
+assert.equal(folderProposalDiagnostics.responseMimeType, "APPLICATION_JSON");
+assert.equal(folderProposalDiagnostics.proposalSchemaType, "object");
+assert.deepEqual(folderProposalDiagnostics.proposalDecisionValues, ["NONE", "PROPOSE"]);
+assert.equal(folderProposalDiagnostics.schemaHasConditionalBranches, false);
+assert.equal(
+  JSON.stringify(folderProposalDiagnostics).includes(injectionText),
+  false,
+  "Proposal diagnostics must never include untrusted document content.",
 );
 
 evaluate(`

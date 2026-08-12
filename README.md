@@ -279,6 +279,8 @@ FOLDER_CREATION_SEMANTIC_GROUPS_JSON=[]
 
 Gli ID root, inbox e review devono essere tutti diversi. `DUPLICATE_FOLDER_NAME` non può coincidere con i nomi riservati o con i nomi effettivi di inbox/review. `FALLBACK_FOLDER_NAME` non può essere `Da smistare`, `Da controllare` o `Duplicati`, non può coincidere con inbox/review né con `DUPLICATE_FOLDER_NAME`. `LOG_FOLDER_NAME` usa `logs` per default e non può coincidere con inbox, review, duplicati o fallback.
 
+I valori in `src/config.ts` sono i default dell’applicazione; una Script Property con lo stesso nome li sostituisce esplicitamente. Non è necessario salvare tutte le opzioni nelle proprietà. In particolare, lasciare assente `FOLDER_CREATION_CONFIDENCE_THRESHOLD` usa il default `0.97`; se la si imposta, con `FOLDER_CREATION_MODE=AUTO`/`SUGGEST` deve essere almeno `CONFIDENCE_THRESHOLD`. I test Drive di sola lettura non dipendono dalle opzioni di proposta cartelle, mentre `runSorter` e `testFolderCreationProposal()` le validano integralmente.
+
 ## Formati documentali e limiti
 
 | Formato | Preparazione |
@@ -342,7 +344,7 @@ Casa/Roma/{IMU, TARI} + documento TASI
   -> proposta: parent=Casa/Roma, nuova foglia=TASI
 ```
 
-Gemini restituisce un oggetto strutturato con parent ID/path esistente, segmenti proposti, tipo `TEMPORAL` o `SEMANTIC`, ID delle cartelle sorelle usate come evidenza, confidenza e motivo breve. Non restituisce mai l'ID della nuova cartella e non può creare nulla direttamente.
+Gemini restituisce sempre un envelope piatto con `proposal.decision` uguale a `NONE` o `PROPOSE`. `NONE` usa campi neutri obbligatori (ID/path vuoti, array vuoti, pattern `NONE`, confidenza `0`); il parser lo converte internamente in assenza di proposta. `PROPOSE` contiene parent ID/path esistente, segmenti proposti, tipo `TEMPORAL` o `SEMANTIC`, ID delle cartelle sorelle usate come evidenza, confidenza e motivo breve. Lo schema inviato al provider non contiene unioni condizionali né enum dinamici di ID; membership, path ed evidenze vengono comunque verificati integralmente contro l'indice Drive fidato. Gemini non restituisce mai l'ID della nuova cartella e non può creare nulla direttamente.
 
 L'applicazione autorizza la proposta soltanto se:
 
@@ -617,7 +619,7 @@ Aggiornare `GEMINI_MODEL` con un modello presente per il proprio progetto e comp
 
 ### Gemini restituisce 400
 
-Il modello potrebbe non supportare l'attuale schema di output strutturato o il documento potrebbe superare un limite effettivo. `testGemini()` e i normali log HTTP riportano soltanto i campi sanificati e limitati `status`, `code` e `message` dell'envelope di errore; richiesta completa, risposta completa e chiave non vengono loggate. Controllare quel dettaglio, modello e proprietà, poi ridurre `MAX_INPUT_BYTES`, `MAX_TEXT_CHARS` o numero di candidate se il messaggio indica un limite. Non viene fatto retry su 400.
+Il modello potrebbe non supportare l'attuale schema di output strutturato o il documento potrebbe superare un limite effettivo. `testGemini()` e i normali log HTTP riportano soltanto i campi sanificati e limitati `status`, `code` e `message` dell'envelope di errore; richiesta completa, risposta completa e chiave non vengono loggate. Per le proposte cartella, il test stampa prima `TEST_FOLDER_PROPOSAL_REQUEST_PROFILE` e un 400 include lo stesso profilo: modello, MIME/dimensione, numero di parent/evidenze, limiti e forma/dimensione dello schema, mai testo del documento o API key. Il profilo deve indicare `proposalSchemaType=object`, decisioni `NONE,PROPOSE` e `schemaHasConditionalBranches=false`. Controllare quei campi, modello e proprietà, poi ridurre `MAX_INPUT_BYTES`, `MAX_TEXT_CHARS` o numero di candidate solo se il messaggio o il profilo indicano un limite. Non viene fatto retry su 400.
 
 ### Errori 429/5xx
 

@@ -68,19 +68,7 @@ function validateDriveConfiguration(config: AppConfig): DriveFolderContext {
   const inbox = getFolderOrThrow(config.inboxFolderId, "INBOX_FOLDER_ID");
   const review = getFolderOrThrow(config.reviewFolderId, "REVIEW_FOLDER_ID");
 
-  const operationalNames = new Set([
-    inbox.getName().trim().toLowerCase(),
-    review.getName().trim().toLowerCase(),
-  ]);
-  if (
-    operationalNames.has(config.duplicateFolderName.toLowerCase()) ||
-    operationalNames.has(config.fallbackFolderName.toLowerCase()) ||
-    operationalNames.has(config.logFolderName.toLowerCase())
-  ) {
-    throw new Error(
-      "I nomi delle cartelle Duplicati/fallback/log non possono coincidere con inbox o review.",
-    );
-  }
+  assertOperationalFolderNamesAreDistinct(config, inbox, review);
 
   if (!isFolderDescendantOf(inbox, root.getId())) {
     throw new Error("INBOX_FOLDER_ID non si trova sotto ROOT_FOLDER_ID.");
@@ -90,6 +78,35 @@ function validateDriveConfiguration(config: AppConfig): DriveFolderContext {
   }
 
   return { root, inbox, review, logFolder: findUniqueDirectChildFolderByName(root, config.logFolderName) };
+}
+
+/** Name diagnostics are explicit because Script Properties may override defaults. */
+function assertOperationalFolderNamesAreDistinct(
+  config: AppConfig,
+  inbox: GoogleAppsScript.Drive.Folder,
+  review: GoogleAppsScript.Drive.Folder,
+): void {
+  const operationalFolders = [
+    { propertyName: "INBOX_FOLDER_ID", folder: inbox },
+    { propertyName: "REVIEW_FOLDER_ID", folder: review },
+  ];
+  const configuredNames = [
+    { propertyName: "DUPLICATE_FOLDER_NAME", value: config.duplicateFolderName },
+    { propertyName: "FALLBACK_FOLDER_NAME", value: config.fallbackFolderName },
+    { propertyName: "LOG_FOLDER_NAME", value: config.logFolderName },
+  ];
+  configuredNames.forEach((configured) => {
+    const conflict = operationalFolders.find(
+      (operational) =>
+        normalizeFolderNameForLookup(configured.value) ===
+        normalizeFolderNameForLookup(operational.folder.getName()),
+    );
+    if (conflict) {
+      throw new Error(
+        `${configured.propertyName}=${configured.value} conflicts with ${conflict.propertyName} folder name=${conflict.folder.getName()} (folderId=${conflict.folder.getId()}). Choose a distinct configured name.`,
+      );
+    }
+  });
 }
 
 function findUniqueDirectChildFolderByName(
